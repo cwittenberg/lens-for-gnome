@@ -1,0 +1,343 @@
+// src/vector/mod.rs
+use rusqlite::{params, Connection};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use rayon::prelude::*;
+use crate::domain::SearchResult;
+use std::path::Path;
+
+pub struct VectorStore {
+    conn: Mutex<Connection>,
+}
+
+impl VectorStore {
+    pub fn new(db_path: &str) -> Self {
+        let conn = Connection::open(db_path).expect("Failed to open SQLite database");
+        
+        conn.execute_batch(
+            "
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA mmap_size = 10000000000;
+            PRAGMA temp_store = MEMORY;
+            PRAGMA cache_size = -2000000;
+            "
+        ).expect("Failed to configure in-memory pragmas");
+
+        // --- SCHEMA MIGRATION ---
+        // Clean up the old bloated document_contents table to free up space
+        conn.execute("DROP TABLE IF EXISTS document_contents", []).ok();
+
+        let mut needs_migration = false;
+        if let Ok(mut stmt) = conn.prepare("PRAGMA table_info(documents)") {
+            if let Ok(mut rows) = stmt.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    let name: String = row.get(1).unwrap_or_default();
+                    if name == "content_zip" {
+                        needs_migration = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if needs_migration {
+            println!("[Database] Migrating existing database schema to split tables...");
+            conn.execute_batch(
+                "
+                BEGIN TRANSACTION;
+                
+                CREATE TABLE documents_new (
+                    id TEXT PRIMARY KEY,
+                    modified_at INTEGER NOT NULL,
+                    metadata JSON NOT NULL,
+                    embedding BLOB NOT NULL
+                );
+                
+                INSERT INTO documents_new (id, modified_at, metadata, embedding)
+                SELECT id, modified_at, metadata, embedding FROM documents;
+
+                DROP TABLE documents;
+                ALTER TABLE documents_new RENAME TO documents;
+                
+                COMMIT;
+                "
+            ).expect("Failed to run schema migration");
+            
+            // Reclaim disk space from dropped tables
+            conn.execute("VACUUM", []).ok();
+        }
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS documents (
+                id TEXT PRIMARY KEY,
+                modified_at INTEGER NOT NULL,
+                metadata JSON NOT NULL,
+                embedding BLOB NOT NULL
+            )",
+            [],
+        ).expect("Failed to create base tables");
+
+        // --- FTS TOKENIZER MIGRATION ---
+        let mut needs_fts_migration = false;
+        let mut fts_exists = false;
+        if let Ok(mut stmt) = conn.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_fts'") {
+            if let Ok(mut rows) = stmt.query([]) {
+                if let Ok(Some(row)) = rows.next() {
+                    fts_exists = true;
+                    let sql: String = row.get(0).unwrap_or_default();
+                    // We check if it is using the old trigram tokenizer
+                    if sql.contains("trigram") {
+                        needs_fts_migration = true;
+                    }
+                }
+            }
+        }
+
+        if needs_fts_migration {
+            println!("[Database] Upgrading FTS5 tokenizer to 'unicode61' for exact keyword/number matching...");
+            conn.execute("DROP TABLE IF EXISTS documents_fts", []).ok();
+            
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+                    id UNINDEXED,
+                    filename,
+                    content_text,
+                    tokenize='unicode61 remove_diacritics 2'
+                )",
+                [],
+            ).expect("Failed to create FTS5 virtual table");
+
+        } else if !fts_exists {
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+                    id UNINDEXED,
+                    filename,
+                    content_text,
+                    tokenize='unicode61 remove_diacritics 2'
+                )",
+                [],
+            ).expect("Failed to create FTS5 virtual table");
+        }
+        // --- END FTS MIGRATION ---
+
+        Self { conn: Mutex::new(conn) }
+    }
+
+    fn f32_to_bytes(vec: &[f32]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(vec.len() * 4);
+        for v in vec {
+            bytes.extend_from_slice(&v.to_ne_bytes());
+        }
+        bytes
+    }
+
+    fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
+        let mut vec = Vec::with_capacity(bytes.len() / 4);
+        for chunk in bytes.chunks_exact(4) {
+            vec.push(f32::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        vec
+    }
+
+    pub fn insert_document(&self, path: String, content: String, embedding: Vec<f32>, modified_at: u64, metadata: HashMap<String, String>) {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        
+        let metadata_json = serde_json::to_string(&metadata).unwrap_or_else(|_| "{}".to_string());
+        let embedding_blob = Self::f32_to_bytes(&embedding);
+        
+        let filename = Path::new(&path).file_name().unwrap_or_default().to_string_lossy().to_string();
+
+        conn.execute("BEGIN TRANSACTION", []).ok();
+
+        if let Err(e) = conn.execute(
+            "INSERT INTO documents (id, modified_at, metadata, embedding) 
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET 
+                modified_at=excluded.modified_at, 
+                metadata=excluded.metadata, 
+                embedding=excluded.embedding",
+            params![&path, modified_at, metadata_json, embedding_blob],
+        ) {
+            eprintln!("[Database] Failed to insert document metadata for {}: {}", path, e);
+            conn.execute("ROLLBACK", []).ok();
+            return;
+        }
+
+        conn.execute("DELETE FROM documents_fts WHERE id = ?1", params![&path]).ok();
+        
+        if let Err(e) = conn.execute(
+            "INSERT INTO documents_fts (id, filename, content_text) VALUES (?1, ?2, ?3)",
+            params![&path, filename, content],
+        ) {
+            eprintln!("[Database] Failed to update FTS5 index for {}: {}", path, e);
+            conn.execute("ROLLBACK", []).ok();
+            return;
+        }
+
+        conn.execute("COMMIT", []).ok();
+    }
+
+    #[inline(always)]
+    fn fast_cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() || a.is_empty() { return 0.0; }
+        let mut dot_product = 0.0;
+        let mut norm_a = 0.0;
+        let mut norm_b = 0.0;
+        for (val_a, val_b) in a.iter().zip(b.iter()) {
+            dot_product += val_a * val_b;
+            norm_a += val_a * val_a;
+            norm_b += val_b * val_b;
+        }
+        if norm_a == 0.0 || norm_b == 0.0 { 0.0 } else { dot_product / (norm_a.sqrt() * norm_b.sqrt()) }
+    }
+
+    pub fn search(&self, target_embedding: &[f32], raw_query_text: &str, min_ts: Option<u64>, max_ts: Option<u64>, filters: &HashMap<String, String>, plugin_id: &str) -> Vec<SearchResult> {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        
+        // 1. Prepare FTS Matches
+        let mut fts_matches = HashMap::new();
+        
+        // Isolate each word into exact prefix tokens so FTS does a strict AND match
+        // "invoice 100 usd" -> '"invoice"' '"100"' '"usd"'
+        let safe_query = raw_query_text
+            .split_whitespace()
+            .filter(|w| !w.is_empty())
+            .map(|w| format!("\"{}\"", w.replace("\"", "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        
+        if let Ok(mut fts_stmt) = conn.prepare(
+            "SELECT id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip 
+             FROM documents_fts 
+             WHERE documents_fts MATCH ?1 
+             ORDER BY rank LIMIT 100"
+        ) {
+            if let Ok(mut rows) = fts_stmt.query(params![safe_query]) {
+                let mut rank = 1;
+                while let Ok(Some(row)) = rows.next() {
+                    let id: String = row.get(0).unwrap();
+                    let snippet: String = row.get(1).unwrap();
+                    fts_matches.insert(id, (rank, snippet));
+                    rank += 1;
+                }
+            }
+        }
+
+        // 2. Fetch all candidates for Vector Scoring
+        let mut sql = String::from("SELECT id, embedding, metadata FROM documents WHERE 1=1");
+        if let Some(min) = min_ts { sql.push_str(&format!(" AND modified_at >= {}", min)); }
+        if let Some(max) = max_ts { sql.push_str(&format!(" AND modified_at <= {}", max)); }
+
+        for (key, val) in filters {
+            sql.push_str(&format!(" AND json_extract(metadata, '$.{}') = '{}'", key, val));
+        }
+
+        let mut stmt = conn.prepare(&sql).expect("Failed to prepare search statement");
+        let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            let metadata_json: String = row.get(2)?;
+            Ok((id, Self::bytes_to_f32(&blob), metadata_json))
+        }).unwrap();
+
+        let mut candidate_records = Vec::new();
+        for record in rows.flatten() {
+            candidate_records.push(record);
+        }
+
+        // 3. Score Vector Similarities
+        let mut vector_scores: Vec<_> = candidate_records.par_iter().map(|(id, embedding, _)| {
+            (id.clone(), Self::fast_cosine_similarity(target_embedding, embedding))
+        }).collect();
+        vector_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut vector_ranks = HashMap::new();
+        for (i, (id, _score)) in vector_scores.iter().enumerate() {
+            vector_ranks.insert(id.clone(), i + 1);
+        }
+
+        // Detect if user query contains specific numbers/digits that must be matched
+        let contains_specifics = raw_query_text.split_whitespace()
+            .any(|w| w.chars().any(|c| c.is_ascii_digit()));
+
+        // 4. Combine via Reciprocal Rank Fusion (RRF)
+        let rrf_k = 60.0;
+        let mut scored_candidates: Vec<_> = candidate_records.into_iter().map(|(id, _emb, metadata_json)| {
+            let v_rank = *vector_ranks.get(&id).unwrap_or(&1000) as f32;
+            let (f_rank, snippet) = if let Some((r, s)) = fts_matches.get(&id) {
+                (*r as f32, s.clone())
+            } else {
+                (1000.0, String::new())
+            };
+            
+            let v_score = if v_rank < 1000.0 { 1.0 / (rrf_k + v_rank) } else { 0.0 };
+            let f_score = if f_rank < 1000.0 { 1.0 / (rrf_k + f_rank) } else { 0.0 };
+            
+            let mut rrf_score = v_score + f_score;
+            let is_fts_match = f_rank < 1000.0;
+
+            // SMART BOOSTING: If the query has numbers, and it DID NOT match FTS exactly, 
+            // penalize it heavily so documents WITH the numbers bubble up.
+            if contains_specifics {
+                if is_fts_match {
+                    rrf_score *= 2.0; // 2x boost for having the exact number
+                } else {
+                    rrf_score *= 0.1; // 90% penalty for semantic guesses missing the hard values
+                }
+            }
+
+            (id, rrf_score, metadata_json, is_fts_match, snippet, v_rank)
+        })
+        .filter(|&(_, score, _, _, _, v_rank)| score > 0.005 || v_rank <= 10.0)
+        .collect();
+
+        scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Expand to provide a better document pool for downstream LLM filtering
+        scored_candidates.truncate(10); 
+
+        let mut results = Vec::new();
+        for (id, score, metadata_json, is_fts_match, fts_snippet, _v_rank) in scored_candidates {
+            let parsed_filename = Path::new(&id).file_name().unwrap_or_default().to_string_lossy().to_string();
+            let mut metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
+            let created_at = metadata.remove("created_at").and_then(|v| v.parse::<u64>().ok());
+            let indexed_at = metadata.remove("indexed_at").and_then(|v| v.parse::<u64>().ok());
+
+            // Extract the full text directly from the FTS table, removing the need for a duplicate table
+            let mut text_stmt = conn.prepare("SELECT content_text FROM documents_fts WHERE id = ?1").unwrap();
+            let full_text: String = text_stmt.query_row(params![&id], |row| row.get(0)).unwrap_or_default();
+
+            let final_snippet = if is_fts_match {
+                fts_snippet
+            } else {
+                if full_text.is_empty() {
+                    "Content snippet unavailable.".to_string()
+                } else {
+                    full_text.chars().take(200).collect::<String>()
+                }
+            };
+
+            results.push(SearchResult {
+                id: id.clone(),
+                title: parsed_filename.clone(),
+                snippet: final_snippet,
+                plugin_id: plugin_id.to_string(),
+                score,
+                filename: Some(parsed_filename),
+                filepath: Some(id),
+                metadata,
+                created_at,
+                indexed_at,
+                full_context: Some(full_text.chars().take(2500).collect::<String>()),
+            });
+        }
+
+        results
+    }
+}
