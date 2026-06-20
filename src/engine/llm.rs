@@ -2,6 +2,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::io::Write;
+use std::env;
 
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -25,6 +26,7 @@ pub struct LlmEngine {
 
 pub struct LlmService {
     engine: Arc<Mutex<LlmEngine>>,
+    debug_mode: bool,
 }
 
 impl LlmService {
@@ -36,12 +38,26 @@ impl LlmService {
         let model = LlamaModel::load_from_file(&backend, "/tmp/phi3-q4.gguf", &model_params)
             .expect("Failed to load GGUF model. Did you download it to /tmp/phi3-q4.gguf?");
 
+        let debug_mode = env::var("DEBUG_LLM_PROMPT").unwrap_or_else(|_| "0".to_string()) == "1";
+        if debug_mode {
+            println!("[DEBUG] LLM prompt debugging is ENABLED. Raw OCR text and prompts will be printed to stdout.");
+        }
+
         Self {
             engine: Arc::new(Mutex::new(LlmEngine { backend, model })),
+            debug_mode,
         }
     }
 
     fn generate_text(&self, prompt: &str, max_tokens: usize) -> String {
+        if self.debug_mode {
+            println!("\n=======================================================================================");
+            println!("[DEBUG] RAW TEXT/PROMPT FED TO THE LLM:");
+            println!("---------------------------------------------------------------------------------------");
+            println!("{}", prompt);
+            println!("=======================================================================================\n");
+        }
+
         let engine = match self.engine.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -52,8 +68,8 @@ impl LlmService {
         
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(std::num::NonZeroU32::new(n_ctx_limit))
-            .with_n_batch(n_batch_limit); 
-        
+            .with_n_batch(n_batch_limit);
+            
         let mut ctx = match engine.model.new_context(&engine.backend, ctx_params) {
             Ok(c) => c,
             Err(_) => return String::new(),
@@ -66,7 +82,15 @@ impl LlmService {
         let max_prompt_len = (n_ctx_limit as usize).saturating_sub(safe_max).saturating_sub(10);
         
         if tokens_list.len() > max_prompt_len {
-            tokens_list.truncate(max_prompt_len);
+            let excess = tokens_list.len() - max_prompt_len;
+            let start_drain = 50.min(tokens_list.len() / 2);
+            let end_drain = (start_drain + excess).min(tokens_list.len().saturating_sub(20));
+
+            if start_drain < end_drain {
+                tokens_list.drain(start_drain..end_drain);
+            } else {
+                tokens_list.truncate(max_prompt_len);
+            }
         }
 
         if tokens_list.is_empty() { 
@@ -124,7 +148,7 @@ impl LlmService {
 
             let token_str = engine.model.token_to_piece(best_token, &mut decoder, false, None)
                 .unwrap_or_default();
-            
+                
             output.push_str(&token_str);
             
             print!("{}", token_str);
@@ -199,7 +223,7 @@ impl LlmService {
         );
 
         let response = self.generate_text(&prompt, 150);
-
+        
         if let Some(start) = response.find('{') {
             if let Some(end) = response.rfind('}') {
                 if start < end {
@@ -217,12 +241,13 @@ impl LlmService {
     /// Generalized Semantic Extractor
     /// Scans the document for the densest cluster of the user's query terms and extracts a clean window of surrounding context.
     fn extract_relevant_window(text: &str, condition: &str, window_chars: usize) -> String {
+        let stop_words = ["what", "how", "why", "who", "when", "the", "and", "for", "with", "that", "this", "are", "you", "from", "does", "was", "is", "a", "an", "of", "in", "to"];
         let lower_text = text.to_lowercase();
         
-        // FIXED E0716: Bind to a variable to extend its lifetime before calling split_whitespace
-        let lower_cond = condition.to_lowercase();
-        let query_terms: Vec<&str> = lower_cond.split_whitespace()
-            .filter(|t| t.len() > 2) // Ignore trivial stop words to prevent false clusters
+        let clean_cond: String = condition.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
+
+        let query_terms: Vec<&str> = clean_cond.split_whitespace()
+            .filter(|t| t.len() > 2 && !stop_words.contains(t))
             .collect();
 
         if query_terms.is_empty() {
@@ -255,6 +280,7 @@ impl LlmService {
             let start_pos = positions[i];
             let end_pos = start_pos + window_bytes;
             let mut count = 0;
+
             for j in i..positions.len() {
                 if positions[j] < end_pos {
                     count += 1;
@@ -262,6 +288,7 @@ impl LlmService {
                     break;
                 }
             }
+
             if count > max_density {
                 max_density = count;
                 best_byte_start = start_pos;
@@ -277,8 +304,8 @@ impl LlmService {
 
     pub fn filter_with_llm(&self, condition: &str, mut candidates: Vec<SearchResult>) -> Vec<SearchResult> {
         if candidates.is_empty() { return vec![]; }
-        candidates.truncate(5);
 
+        candidates.truncate(5);
         let mut docs_block = String::new();
         
         for (i, doc) in candidates.iter().enumerate() {
@@ -295,7 +322,6 @@ impl LlmService {
         );
 
         let response = self.generate_text(&prompt, 150);
-
         let mut matched_indices: Vec<usize> = Vec::new();
         
         if let Some(start) = response.find('[') {
@@ -331,23 +357,30 @@ impl LlmService {
 
     pub fn generate_synthesis(&self, query: &str, mut context_docs: Vec<SearchResult>) -> String {
         if context_docs.is_empty() { return "No documents found.".to_string(); }
+
         context_docs.truncate(4);
         
         let mut context_block = String::new();
         for (i, doc) in context_docs.iter().enumerate() {
             let content = doc.full_context.as_deref().unwrap_or(&doc.snippet);
             let safe_content = Self::extract_relevant_window(content, query, 600);
-            context_block.push_str(&format!("Document {}:\n{}\n\n", i + 1, safe_content));
+            // INJECT: Use doc.title so the prompt sees the file name
+            context_block.push_str(&format!("Source [{}] ({}):\n{}\n\n", i + 1, doc.title, safe_content));
         }
 
+        // INJECT: Strong prompt engineering for citations and confidence metric
         let prompt = format!(
-            "<|user|>\nYou are a helpful AI assistant. Answer the user's query using ONLY the provided context documents. \
-            If the answer is not contained in the documents, state that you do not have enough information.\n\n\
+            "<|user|>\nYou are an analytical AI assistant. Answer the user's query using ONLY the provided context documents. \
+            \n\nCRITICAL INSTRUCTIONS:\
+            \n1. You MUST explicitly cite the Source name (e.g., 'According to pie2.png...') for every fact you provide.\
+            \n2. At the very end of your response, you MUST provide a 'Confidence Score: X%' and a brief 'Confidence Interval Justification'. \
+            Score 100% ONLY if the provided text contains the complete, explicit answer. Score lower if you had to infer, or if the data is partial/fragmented. \
+            \nIf the answer is not contained in the documents at all, state that you do not have enough information and give a Confidence Score of 0%.\n\n\
             CONTEXT:\n{}\n\n\
             QUERY: {}<|end|>\n<|assistant|>\n",
             context_block, query
         );
 
-        self.generate_text(&prompt, 400)
+        self.generate_text(&prompt, 500)
     }
 }

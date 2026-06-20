@@ -5,7 +5,7 @@ pub mod pdf;
 pub mod office;
 pub mod spreadsheet;
 pub mod legacy;
-pub mod image; // Phase 3: Added image extractor module
+pub mod image; 
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -15,6 +15,9 @@ use walkdir::WalkDir;
 use rayon::prelude::*;
 use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
 use crate::vector::VectorStore;
+
+// Configurable global limit for text extraction per document
+const MAX_DOC_BYTES: usize = 256_000;
 
 pub trait FileExtractor: Send + Sync {
     fn can_handle(&self, extension: &str) -> bool;
@@ -46,11 +49,11 @@ impl IngestionPipeline {
             extractors: vec![
                 Box::new(plaintext::TxtExtractor),
                 Box::new(csv_file::CsvExtractor),
-                Box::new(pdf::PdfExtractor),
+                Box::new(pdf::PdfExtractor::new(MAX_DOC_BYTES)), 
                 Box::new(office::ModernOfficeExtractor),
                 Box::new(spreadsheet::SpreadsheetExtractor),
                 Box::new(legacy::LegacyDocExtractor),
-                Box::new(image::ImageExtractor::new()), // Phase 3: Registered native Vision Engine Extractor
+                Box::new(image::ImageExtractor::new()), 
             ],
             domain_keywords,
         }
@@ -220,8 +223,32 @@ impl IngestionPipeline {
         result
     }
 
+    pub fn remove_file(&self, path: &Path) {
+        let path_str = path.to_string_lossy().to_string();
+        self.store.delete_document(&path_str);
+        if let Some(name) = path.file_name() {
+            println!("[Indexer] Removed from index: {:?}", name);
+        }
+    }
+
     pub fn index_file(&self, path: &Path) {
         if !path.is_file() { return; }
+        
+        let path_str = path.to_string_lossy().to_string();
+
+        let modified_at = path.metadata()
+            .ok()
+            .and_then(|m| m.modified().ok().or_else(|| m.created().ok()))
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+
+        if let Some(db_modified) = self.store.get_document_modified_at(&path_str) {
+            if modified_at <= db_modified {
+                return; // Skip reindexing, file is unchanged
+            }
+        }
+
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -229,18 +256,11 @@ impl IngestionPipeline {
                 if let Ok(content) = extractor.extract(path) {
                     
                     // Route through the new intelligent truncation heuristic
-                    let content = self.smart_truncate(&content, 256_000);
+                    let content = self.smart_truncate(&content, MAX_DOC_BYTES);
 
                     let mut metadata = self.extract_entities(&content, ext);
                     
-                    let created_at = path.metadata()
-                        .ok()
-                        .and_then(|m| m.created().ok())
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(now);
-
-                    metadata.insert("created_at".to_string(), created_at.to_string());
+                    metadata.insert("created_at".to_string(), modified_at.to_string());
                     metadata.insert("indexed_at".to_string(), now.to_string());
 
                     let safe_content = content.chars().take(8000).collect::<String>();
@@ -255,10 +275,10 @@ impl IngestionPipeline {
 
                     if let Some(vector) = vector_option {
                         self.store.insert_document(
-                            path.to_string_lossy().to_string(),
+                            path_str,
                             content, 
                             vector,
-                            now,
+                            modified_at,
                             metadata
                         );
                         println!("[Indexer] Processed: {:?}", path.file_name().unwrap_or_default());
@@ -273,7 +293,13 @@ impl IngestionPipeline {
     pub fn run_indexer(&self, target_dir: &str) {
         println!("Starting Multi-lingual AI ingestion sweep on: {}", target_dir);
         
-        let entries: Vec<_> = WalkDir::new(target_dir).into_iter().filter_map(|e| e.ok()).collect();
+        let mut entries = Vec::new();
+        for entry in WalkDir::new(target_dir).into_iter() {
+            match entry {
+                Ok(e) => entries.push(e),
+                Err(err) => eprintln!("[Indexer] Directory traversal error: {}", err),
+            }
+        }
         
         entries.par_iter().for_each(|entry| {
             self.index_file(entry.path());

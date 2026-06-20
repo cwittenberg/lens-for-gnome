@@ -107,7 +107,6 @@ impl VectorStore {
                 )",
                 [],
             ).expect("Failed to create FTS5 virtual table");
-
         } else if !fts_exists {
             conn.execute(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
@@ -119,9 +118,43 @@ impl VectorStore {
                 [],
             ).expect("Failed to create FTS5 virtual table");
         }
+        
+        // FIX: Force re-indexing of all existing documents so text content isn't lost during table drops
+        if needs_migration || needs_fts_migration {
+            println!("[Database] Resetting modification timestamps to rebuild dropped text indices...");
+            conn.execute("UPDATE documents SET modified_at = 0", []).ok();
+        }
         // --- END FTS MIGRATION ---
 
         Self { conn: Mutex::new(conn) }
+    }
+
+    pub fn get_document_modified_at(&self, path: &str) -> Option<u64> {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        let mut stmt = conn.prepare("SELECT modified_at FROM documents WHERE id = ?1").ok()?;
+        let mut rows = stmt.query(params![path]).ok()?;
+
+        if let Ok(Some(row)) = rows.next() {
+            row.get(0).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn delete_document(&self, path: &str) {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        conn.execute("BEGIN TRANSACTION", []).ok();
+        conn.execute("DELETE FROM documents WHERE id = ?1", params![path]).ok();
+        conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![path]).ok();
+        conn.execute("COMMIT", []).ok();
     }
 
     fn f32_to_bytes(vec: &[f32]) -> Vec<u8> {
@@ -157,9 +190,9 @@ impl VectorStore {
             "INSERT INTO documents (id, modified_at, metadata, embedding) 
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(id) DO UPDATE SET 
-                modified_at=excluded.modified_at, 
-                metadata=excluded.metadata, 
-                embedding=excluded.embedding",
+                 modified_at=excluded.modified_at,
+                 metadata=excluded.metadata,
+                 embedding=excluded.embedding",
             params![&path, modified_at, metadata_json, embedding_blob],
         ) {
             eprintln!("[Database] Failed to insert document metadata for {}: {}", path, e);
@@ -167,7 +200,8 @@ impl VectorStore {
             return;
         }
 
-        conn.execute("DELETE FROM documents_fts WHERE id = ?1", params![&path]).ok();
+        // FIX: FTS5 does not allow filtering by unindexed columns in DELETE directly. Must subquery rowid.
+        conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![&path]).ok();
         
         if let Err(e) = conn.execute(
             "INSERT INTO documents_fts (id, filename, content_text) VALUES (?1, ?2, ?3)",
@@ -204,42 +238,53 @@ impl VectorStore {
         // 1. Prepare FTS Matches
         let mut fts_matches = HashMap::new();
         
-        // Isolate each word into exact prefix tokens so FTS does a strict AND match
-        // "invoice 100 usd" -> '"invoice"' '"100"' '"usd"'
-        let safe_query = raw_query_text
-            .split_whitespace()
-            .filter(|w| !w.is_empty())
-            .map(|w| format!("\"{}\"", w.replace("\"", "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" ");
+        // CRITICAL FIX: Natural language queries like "what was the recipe for the pie?"
+        // will fail FTS AND logic if we include stop words or punctuation.
+        let stop_words = ["what", "how", "why", "who", "when", "the", "and", "for", "with", "that", "this", "are", "you", "from", "does", "was", "is", "a", "an", "of", "in", "to"];
         
-        if let Ok(mut fts_stmt) = conn.prepare(
-            "SELECT id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip 
-             FROM documents_fts 
-             WHERE documents_fts MATCH ?1 
-             ORDER BY rank LIMIT 100"
-        ) {
-            if let Ok(mut rows) = fts_stmt.query(params![safe_query]) {
-                let mut rank = 1;
-                while let Ok(Some(row)) = rows.next() {
-                    let id: String = row.get(0).unwrap();
-                    let snippet: String = row.get(1).unwrap();
-                    fts_matches.insert(id, (rank, snippet));
-                    rank += 1;
+        let clean_query_text: String = raw_query_text.to_lowercase().chars()
+            .filter(|c| c.is_alphanumeric() || *c == ' ')
+            .collect();
+
+        // Use OR so partial semantic matches get boosted natively by FTS5
+        let safe_query = clean_query_text
+            .split_whitespace()
+            .filter(|w| w.len() > 2 && !stop_words.contains(w))
+            .map(|w| format!("\"{}\"", w))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+            
+        if !safe_query.is_empty() {
+            if let Ok(mut fts_stmt) = conn.prepare(
+                "SELECT id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip
+                 FROM documents_fts
+                 WHERE documents_fts MATCH ?1
+                 ORDER BY rank LIMIT 100"
+            ) {
+                if let Ok(mut rows) = fts_stmt.query(params![safe_query]) {
+                    let mut rank = 1;
+                    while let Ok(Some(row)) = rows.next() {
+                        let id: String = row.get(0).unwrap();
+                        let snippet: String = row.get(1).unwrap();
+                        fts_matches.insert(id, (rank, snippet));
+                        rank += 1;
+                    }
                 }
             }
         }
 
         // 2. Fetch all candidates for Vector Scoring
         let mut sql = String::from("SELECT id, embedding, metadata FROM documents WHERE 1=1");
+        
         if let Some(min) = min_ts { sql.push_str(&format!(" AND modified_at >= {}", min)); }
         if let Some(max) = max_ts { sql.push_str(&format!(" AND modified_at <= {}", max)); }
-
+        
         for (key, val) in filters {
             sql.push_str(&format!(" AND json_extract(metadata, '$.{}') = '{}'", key, val));
         }
 
         let mut stmt = conn.prepare(&sql).expect("Failed to prepare search statement");
+        
         let rows = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
             let blob: Vec<u8> = row.get(1)?;
@@ -256,8 +301,9 @@ impl VectorStore {
         let mut vector_scores: Vec<_> = candidate_records.par_iter().map(|(id, embedding, _)| {
             (id.clone(), Self::fast_cosine_similarity(target_embedding, embedding))
         }).collect();
-        vector_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
+        vector_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
         let mut vector_ranks = HashMap::new();
         for (i, (id, _score)) in vector_scores.iter().enumerate() {
             vector_ranks.insert(id.clone(), i + 1);
@@ -269,8 +315,10 @@ impl VectorStore {
 
         // 4. Combine via Reciprocal Rank Fusion (RRF)
         let rrf_k = 60.0;
+        
         let mut scored_candidates: Vec<_> = candidate_records.into_iter().map(|(id, _emb, metadata_json)| {
             let v_rank = *vector_ranks.get(&id).unwrap_or(&1000) as f32;
+            
             let (f_rank, snippet) = if let Some((r, s)) = fts_matches.get(&id) {
                 (*r as f32, s.clone())
             } else {
@@ -299,6 +347,7 @@ impl VectorStore {
         .collect();
 
         scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
         // Expand to provide a better document pool for downstream LLM filtering
         scored_candidates.truncate(10); 
 
@@ -306,6 +355,7 @@ impl VectorStore {
         for (id, score, metadata_json, is_fts_match, fts_snippet, _v_rank) in scored_candidates {
             let parsed_filename = Path::new(&id).file_name().unwrap_or_default().to_string_lossy().to_string();
             let mut metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
+            
             let created_at = metadata.remove("created_at").and_then(|v| v.parse::<u64>().ok());
             let indexed_at = metadata.remove("indexed_at").and_then(|v| v.parse::<u64>().ok());
 

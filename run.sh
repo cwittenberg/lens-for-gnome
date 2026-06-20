@@ -9,7 +9,7 @@ echo "Setting up secure directories..."
 mkdir -p ~/.local/state/gnome-lens
 
 echo "Starting daemon in the background..."
-nohup ./target/debug/gnome-lens > ~/.local/state/gnome-lens/daemon.log 2>&1 &
+DEBUG_VISION_OCR=1 nohup ./target/debug/gnome-lens > ~/.local/state/gnome-lens/daemon.log 2>&1 &
 
 echo "Tailing logs (Press Ctrl+C to exit logs, daemon will keep running)..."
 sleep 0.5

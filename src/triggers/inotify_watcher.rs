@@ -26,16 +26,32 @@ impl IndexTrigger for INotifyTrigger {
             for res in rx {
                 match res {
                     Ok(Event { kind, paths, .. }) => {
-                        // We strictly filter events to avoid wasting CPU on access reads or renames.
-                        // We only fire the AI embedding pipeline if a file is physically created
-                        // or its data payload is modified (saved).
-                        if matches!(kind, EventKind::Create(_) | EventKind::Modify(ModifyKind::Data(_))) {
-                            for path in paths {
-                                if path.is_file() {
-                                    // Instantly route the modified file into the ingestion pipeline
-                                    pipeline.index_file(&path);
+                        match kind {
+                            EventKind::Create(_) | EventKind::Modify(ModifyKind::Data(_)) => {
+                                for path in paths {
+                                    if path.is_file() {
+                                        pipeline.index_file(&path);
+                                    }
                                 }
-                            }
+                            },
+                            EventKind::Remove(_) => {
+                                for path in paths {
+                                    pipeline.remove_file(&path);
+                                }
+                            },
+                            EventKind::Modify(ModifyKind::Name(_)) => {
+                                // For renames/moves, verify if the current target is an active file
+                                for path in paths {
+                                    if path.exists() {
+                                        if path.is_file() {
+                                            pipeline.index_file(&path);
+                                        }
+                                    } else {
+                                        pipeline.remove_file(&path);
+                                    }
+                                }
+                            },
+                            _ => {}
                         }
                     },
                     Err(e) => eprintln!("INotify watch error: {:?}", e),
