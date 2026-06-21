@@ -3,8 +3,14 @@
 echo "Building Release version..."
 cargo build --release
 
-echo "Setting up secure log directory..."
+echo "Setting up secure directories..."
 mkdir -p ~/.local/state/gnome-lens
+mkdir -p ~/.config/gnome-lens
+
+if [ -f "models.json" ]; then
+    echo "Deploying models.json configuration..."
+    cp models.json ~/.config/gnome-lens/models.json
+fi
 
 echo "Copying existing service file to systemd user directory..."
 mkdir -p ~/.config/systemd/user/

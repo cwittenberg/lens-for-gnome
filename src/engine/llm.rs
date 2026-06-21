@@ -10,6 +10,7 @@ use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 
 use crate::domain::{SearchQuery, SearchResult};
+use crate::engine::model_manager::ModelManager;
 
 #[derive(PartialEq)]
 pub enum LlmIntent {
@@ -20,8 +21,8 @@ pub enum LlmIntent {
 }
 
 pub struct LlmEngine {
-    backend: LlamaBackend,
-    model: LlamaModel,
+    pub backend: LlamaBackend,
+    pub model: LlamaModel,
 }
 
 pub struct LlmService {
@@ -34,19 +35,40 @@ impl LlmService {
         println!("Initializing llama.cpp Backend...");
         
         let backend = LlamaBackend::init().expect("Failed to initialize C++ backend");
+        let (model_path, model_url) = ModelManager::get_active_model_path_and_url();
+        
+        ModelManager::ensure_model_available(&model_path, &model_url);
+
         let model_params = LlamaModelParams::default();
-        let model = LlamaModel::load_from_file(&backend, "/tmp/phi3-q4.gguf", &model_params)
-            .expect("Failed to load GGUF model. Did you download it to /tmp/phi3-q4.gguf?");
+        let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
+            .unwrap_or_else(|_| panic!("Failed to load GGUF model from {}.", model_path));
 
         let debug_mode = env::var("DEBUG_LLM_PROMPT").unwrap_or_else(|_| "0".to_string()) == "1";
-        if debug_mode {
-            println!("[DEBUG] LLM prompt debugging is ENABLED. Raw OCR text and prompts will be printed to stdout.");
-        }
-
+        
         Self {
             engine: Arc::new(Mutex::new(LlmEngine { backend, model })),
             debug_mode,
         }
+    }
+
+    /// Hotswaps the AI model. Yields execution to the manager to fetch missing files.
+    pub fn switch_model<F>(&self, model_id: &str, send_chunk: &mut F) -> Result<(), String> 
+    where F: FnMut(String) 
+    {
+        let model_path = ModelManager::download_model_if_needed(model_id, send_chunk)?;
+
+        send_chunk(serde_json::json!({"status": "processing", "message": "Loading model into memory..."}).to_string());
+        
+        // Block inferences and load the newly requested model
+        let mut engine_guard = self.engine.lock().unwrap();
+        let new_model = LlamaModel::load_from_file(&engine_guard.backend, &model_path, &LlamaModelParams::default())
+            .map_err(|_| "Corrupted model file or failed to load into RAM")?;
+        
+        ModelManager::set_active_model(model_id)?;
+        
+        engine_guard.model = new_model;
+
+        Ok(())
     }
 
     fn generate_text(&self, prompt: &str, max_tokens: usize) -> String {
@@ -66,9 +88,18 @@ impl LlmService {
         let n_ctx_limit: u32 = 4096;
         let n_batch_limit: u32 = 512;
         
+        // Dynamically allocate CPU threads, maxing out at 8. 
+        // Cast to i32 as required by llama_cpp_2 context parameters.
+        let available_threads = std::thread::available_parallelism()
+            .map(|n| n.get() as i32)
+            .unwrap_or(4);
+        let optimal_threads = available_threads.min(8);
+        
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(std::num::NonZeroU32::new(n_ctx_limit))
-            .with_n_batch(n_batch_limit);
+            .with_n_batch(n_batch_limit)
+            .with_n_threads(optimal_threads)
+            .with_n_threads_batch(optimal_threads);
             
         let mut ctx = match engine.model.new_context(&engine.backend, ctx_params) {
             Ok(c) => c,
@@ -97,7 +128,7 @@ impl LlmService {
             return String::new(); 
         }
 
-        println!("[LLM] Ingesting prompt ({} tokens)...", tokens_list.len());
+        println!("[LLM] Ingesting prompt ({} tokens) on {} threads...", tokens_list.len(), optimal_threads);
         
         let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(n_batch_limit as usize, 1);
         let mut n_cur = 0;
@@ -154,7 +185,8 @@ impl LlmService {
             print!("{}", token_str);
             let _ = std::io::stdout().flush();
 
-            if output.contains("<|end|>") || output.contains("<|user|>") || output.contains("<|assistant|>") {
+            if output.contains("<|end|>") || output.contains("<|user|>") || output.contains("<|assistant|>") 
+                || output.contains("<|eot_id|>") || output.contains("<|im_end|>") || output.contains("<|im_start|>") {
                 break;
             }
 
@@ -173,40 +205,65 @@ impl LlmService {
         output
     }
 
-    pub fn determine_intent(query: &str, explicit_synthesis: bool) -> LlmIntent {
+    /// Zero-Shot Semantic Intent Classifier gated by a Zero-Cost Lexical Pre-Filter.
+    pub fn determine_intent(&self, query: &str, explicit_synthesis: bool) -> LlmIntent {
         if explicit_synthesis { return LlmIntent::SynthesizeAnswer; }
 
         let lower = query.to_lowercase();
+        let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).collect();
         
-        let filter_triggers = [
-            "less than", "greater than", "more than", "under ", "over ", 
-            "below ", "above ", "without ", "exactly ", "minder dan", "meer dan", "contain"
+        // ------------------------------------------------------------------------------------
+        // FAST PRE-FILTER (Zero-Cost): Only engage the Neural Network if the query 
+        // contains linguistic markers that suggest a question, filter, or temporal constraint.
+        // ------------------------------------------------------------------------------------
+        let trigger_words = [
+            // English
+            "what", "how", "why", "who", "when", "where", "which", "explain", "summarize",
+            "less", "greater", "under", "over", "below", "above", "only", 
+            "ago", "last", "past", "days", "weeks", "months", "years", "before", "after",
+            // Dutch / German
+            "wat", "hoe", "waarom", "wie", "wanneer", "minder", "meer", "geleden", "vorige", "laatste",
+            "wie", "was", "warum", "wer", "wann", "unter", "über", "vor", "letzte",
+            // Spanish
+            "que", "como", "porque", "quien", "donde", "cual", "explique", "resuma",
+            "menos", "mayor", "debajo", "encima", "hace", "pasado", "dias", "semanas", "meses", "años"
         ];
-        if filter_triggers.iter().any(|&t| lower.contains(t)) {
-            return LlmIntent::FilterResults;
+
+        let has_trigger = trigger_words.iter().any(|&w| words.contains(&w));
+
+        // If the query is just standard keyword terms (e.g. "invoice 2026", "q3 report"), skip the LLM instantly.
+        if !has_trigger {
+            return LlmIntent::Skip;
         }
 
-        let synthesis_triggers = [
-            "what", "how", "why", "who", "when", "summarize", "explain", 
-            "wat", "hoe", "waarom", "wie", "wanneer", "vat samen", "leg uit"
-        ];
-        if synthesis_triggers.iter().any(|&t| lower.starts_with(t) || lower.contains(&format!(" {} ", t))) {
-            return LlmIntent::SynthesizeAnswer;
-        }
+        // ------------------------------------------------------------------------------------
+        // SEMANTIC VERIFICATION: If markers exist, ask the LLM to verify the semantic intent
+        // ------------------------------------------------------------------------------------
+        let prompt = format!(
+            "<|user|>\nYou are a strict multilingual routing API. Classify the user's intent for this search query into ONE category.\n\
+            The query may be in any language (e.g. Spanish, Chinese, Dutch). Translate its semantic meaning internally before classifying.\n\
+            Categories:\n\
+            1: SKIP (Standard keyword search for documents, nouns, entities, or names)\n\
+            2: REFINE_TIME (Query filters by relative time, e.g., 'last week', '3 days ago', 'hace 2 dias', 'vorige week')\n\
+            3: FILTER_VALUE (Query filters by numerical conditions, e.g., 'greater than 50', 'under 100', 'below', 'menos que')\n\
+            4: SYNTHESIZE (Query asks a question to be answered, e.g., 'how does', 'explain', 'what is', 'como funciona', 'wat is')\n\n\
+            Query: \"{}\"\n\
+            Return ONLY a single digit (1, 2, 3, or 4).<|end|>\n<|assistant|>\n",
+            query
+        );
 
-        let time_triggers = [
-            "ago", "geleden", "hace", "vor", 
-            "days", "dagen", "días", "tage", "day", "dag", "tag",
-            "weeks", "weken", "semanas", "wochen", "week", "semana", "woche",
-            "months", "maanden", "meses", "monate", "month", "maand", "monat",
-            "years", "jaren", "años", "anos", "jahre", "year", "jaar", "año", "ano", "jahr",
-            "last", "vorige", "pasado", "letzte"
-        ];
-        if time_triggers.iter().any(|&t| lower.contains(t)) {
-            return LlmIntent::RefineSearch;
+        // Limit generation to 5 tokens to guarantee sub-50ms execution speed for the router
+        let response = self.generate_text(&prompt, 5).trim().to_string();
+        
+        if response.contains('4') {
+            LlmIntent::SynthesizeAnswer
+        } else if response.contains('3') {
+            LlmIntent::FilterResults
+        } else if response.contains('2') {
+            LlmIntent::RefineSearch
+        } else {
+            LlmIntent::Skip
         }
-
-        LlmIntent::Skip
     }
 
     pub fn apply_temporal_heuristics(&self, query: &mut SearchQuery) {
@@ -214,8 +271,8 @@ impl LlmService {
         let lower_text = query.raw_text.to_lowercase();
 
         let prompt = format!(
-            "<|user|>\nYou are a JSON-only extraction API. The current UNIX timestamp is {}. \
-            Analyze the following search query and extract the time constraints. \
+            "<|user|>\nYou are a multilingual JSON-only extraction API. The current UNIX timestamp is {}. \
+            Analyze the following search query (which may be in any language) and extract the time constraints. \
             Return ONLY a raw JSON object with NO markdown formatting. \
             Format: {{\"min_ts\": number_or_null, \"max_ts\": number_or_null, \"clean_query\": \"string_without_time_words\"}} \
             Query: \"{}\"<|end|>\n<|assistant|>\n",
@@ -238,10 +295,13 @@ impl LlmService {
         }
     }
 
-    /// Generalized Semantic Extractor
-    /// Scans the document for the densest cluster of the user's query terms and extracts a clean window of surrounding context.
     fn extract_relevant_window(text: &str, condition: &str, window_chars: usize) -> String {
-        let stop_words = ["what", "how", "why", "who", "when", "the", "and", "for", "with", "that", "this", "are", "you", "from", "does", "was", "is", "a", "an", "of", "in", "to"];
+        // Universal stop words covering English, Spanish, Dutch, and French to prevent over-filtering during localized FTS
+        let stop_words = [
+            "what", "how", "why", "who", "when", "the", "and", "for", "with", "that", "this", "are", "you", "from", "does", "was", "is", "a", "an", "of", "in", "to",
+            "que", "como", "por", "quien", "cuando", "el", "la", "los", "las", "y", "para", "con", "eso", "esto", "son", "tu", "desde", "hace", "era", "es", "un", "una", "de", "en",
+            "wat", "hoe", "waarom", "wie", "wanneer", "de", "het", "en", "voor", "met", "dat", "dit", "zijn", "jij", "van", "doet", "was", "is", "een", "in", "naar"
+        ];
         let lower_text = text.to_lowercase();
         
         let clean_cond: String = condition.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
@@ -257,7 +317,6 @@ impl LlmService {
         let mut positions = Vec::new();
         for term in &query_terms {
             let mut start = 0;
-            // .find() is guaranteed to return valid char boundaries
             while let Some(pos) = lower_text[start..].find(term) {
                 let absolute_pos = start + pos;
                 positions.push(absolute_pos);
@@ -269,7 +328,6 @@ impl LlmService {
             return text.chars().take(window_chars).collect();
         }
 
-        // Find the densest cluster of terms within a given approximate span
         positions.sort_unstable();
         let mut best_byte_start = positions[0];
         let mut max_density = 0;
@@ -295,9 +353,8 @@ impl LlmService {
             }
         }
 
-        // Translate safe byte boundary back to an absolute character index for multi-byte resilient slicing
         let start_char_idx = text[..best_byte_start].chars().count();
-        let safe_start = start_char_idx.saturating_sub(60); // Provide 60 chars of leading context
+        let safe_start = start_char_idx.saturating_sub(60);
         
         text.chars().skip(safe_start).take(window_chars).collect()
     }
@@ -315,7 +372,7 @@ impl LlmService {
         }
 
         let prompt = format!(
-            "<|user|>\nDetermine which documents satisfy this condition: \"{}\". \
+            "<|user|>\nDetermine which documents satisfy this condition (which may be in any language): \"{}\". \
             Review the following document excerpts. Return ONLY a JSON array of the matching [ID]s (e.g., [0, 2]). If none match, return [].\n\n\
             DOCUMENTS:\n{}<|end|>\n<|assistant|>\n",
             condition, docs_block
@@ -364,14 +421,13 @@ impl LlmService {
         for (i, doc) in context_docs.iter().enumerate() {
             let content = doc.full_context.as_deref().unwrap_or(&doc.snippet);
             let safe_content = Self::extract_relevant_window(content, query, 600);
-            // INJECT: Use doc.title so the prompt sees the file name
             context_block.push_str(&format!("Source [{}] ({}):\n{}\n\n", i + 1, doc.title, safe_content));
         }
 
-        // INJECT: Strong prompt engineering for citations and confidence metric
         let prompt = format!(
-            "<|user|>\nYou are an analytical AI assistant. Answer the user's query using ONLY the provided context documents. \
-            \n\nCRITICAL INSTRUCTIONS:\
+            "<|user|>\nYou are an analytical multilingual AI assistant. Answer the user's query using ONLY the provided context documents. \
+            You MUST reply in the same language as the user's query.\n\
+            \nCRITICAL INSTRUCTIONS:\
             \n1. You MUST explicitly cite the Source name (e.g., 'According to pie2.png...') for every fact you provide.\
             \n2. At the very end of your response, you MUST provide a 'Confidence Score: X%' and a brief 'Confidence Interval Justification'. \
             Score 100% ONLY if the provided text contains the complete, explicit answer. Score lower if you had to infer, or if the data is partial/fragmented. \

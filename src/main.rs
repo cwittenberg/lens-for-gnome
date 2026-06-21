@@ -14,6 +14,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::env;
 use std::thread;
+use std::time::Instant;
 
 use crate::vector::VectorStore;
 use crate::ingestion::IngestionPipeline;
@@ -27,6 +28,7 @@ fn handle_client(mut stream: UnixStream, router: Arc<SystemRouter>) {
         if bytes_read > 0 {
             let request = String::from_utf8_lossy(&buffer[..bytes_read]);
             
+            let start_time = Instant::now();
             println!("[Daemon] Received Query: {}", request.trim());
             
             router.handle_request(&request, |chunk| {
@@ -36,7 +38,7 @@ fn handle_client(mut stream: UnixStream, router: Arc<SystemRouter>) {
                 let _ = stream.flush(); 
             });
 
-            println!("[Daemon] Finished streaming response.");
+            println!("[Daemon] Finished streaming response in {:.2?}", start_time.elapsed());
         }
     }
 }

@@ -21,14 +21,15 @@ const GnomeLensUI = GObject.registerClass({
             can_focus: true,
             x: 0,
             y: 0,
-            width: Main.layoutManager.primaryMonitor.width,
-            height: Main.layoutManager.primaryMonitor.height,
+            width: 100,
+            height: 100,
         });
 
         this._settings = settings;
         this._extension = extension;
         this._cancellable = null;
         this._socketClient = null;
+        this._connection = null;
         this._inputStream = null;
         this._outputStream = null;
 
@@ -41,7 +42,9 @@ const GnomeLensUI = GObject.registerClass({
         this._llmTimerId = 0;
         this._llmDotCount = 0;
         this._activeStatusText = '';
+
         this._debounceId = 0;
+        this._isSearching = false;
 
         this._modalGrab = null;
         this._modalPushed = false;
@@ -49,12 +52,6 @@ const GnomeLensUI = GObject.registerClass({
 
         this.isOpen = false;
         this.isClosing = false;
-
-        this._thumbnailsCacheDir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'gnome-lens', 'thumbnails']);
-        let dirFile = Gio.File.new_for_path(this._thumbnailsCacheDir);
-        if (!dirFile.query_exists(null)) {
-            try { dirFile.make_directory_with_parents(null); } catch(e) {}
-        }
 
         this._buildUI();
 
@@ -72,7 +69,6 @@ const GnomeLensUI = GObject.registerClass({
             style_class: 'lens-dialog',
             reactive: true,
         });
-
         this._dialog.set_pivot_point(0.5, 0.5);
         this._dialog.set_scale(0.9, 0.9);
         this._dialog.set_opacity(0);
@@ -86,6 +82,15 @@ const GnomeLensUI = GObject.registerClass({
             vertical: false,
         });
 
+        this._searchIcon = new St.Icon({
+            icon_name: 'system-search-symbolic',
+            icon_size: 24,
+            style_class: 'lens-search-icon',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._searchIcon.set_style('margin-right: 12px; color: rgba(255, 255, 255, 0.5);');
+        entryContainer.add_child(this._searchIcon);
+
         this._entry = new St.Entry({
             style_class: 'lens-entry',
             hint_text: 'Search files, ask the AI...',
@@ -93,7 +98,6 @@ const GnomeLensUI = GObject.registerClass({
             y_align: Clutter.ActorAlign.CENTER,
             can_focus: true,
         });
-
         this._entry.clutter_text.connectObject('text-changed', this._onSearchTextChanged.bind(this), this);
         this._entry.clutter_text.connectObject('key-press-event', this._onKeyPress.bind(this), this);
         entryContainer.add_child(this._entry);
@@ -105,16 +109,13 @@ const GnomeLensUI = GObject.registerClass({
             reactive: true,
             can_focus: true,
         });
-
         this._closeButton.connectObject('button-press-event', () => {
             this.close(true);
             return Clutter.EVENT_STOP;
         }, this);
-
         this._closeButton.connectObject('clicked', () => {
             this.close(true);
         }, this);
-
         entryContainer.add_child(this._closeButton);
 
         this._dialog.add_child(entryContainer);
@@ -131,7 +132,6 @@ const GnomeLensUI = GObject.registerClass({
             vertical: true,
             x_expand: true,
         });
-
         this._scrollView.add_child(this._resultsBox);
         this._dialog.add_child(this._scrollView);
 
@@ -157,18 +157,35 @@ const GnomeLensUI = GObject.registerClass({
         this._updatePosition(false, false);
     }
 
+    _getActiveMonitor() {
+        let [x, y] = global.get_pointer();
+        
+        let monitors = Main.layoutManager.monitors;
+        let activeMonitorIndex = monitors.findIndex(m => 
+            x >= m.x && x < m.x + m.width &&
+            y >= m.y && y < m.y + m.height
+        );
+
+        if (activeMonitorIndex >= 0) {
+            return monitors[activeMonitorIndex];
+        }
+        return Main.layoutManager.primaryMonitor;
+    }
+
     _updatePosition(hasResults = false, animate = true) {
         this._hasResults = hasResults;
-        let monitor = Main.layoutManager.primaryMonitor;
+        let monitor = this._getActiveMonitor();
         
         this.set_position(monitor.x, monitor.y);
         this.set_size(monitor.width, monitor.height);
 
-        let dialogWidth = 850;
+        let dialogWidth = Math.min(1560, Math.floor(monitor.width * 0.85));
         this._dialog.set_width(dialogWidth);
 
-        let targetX = Math.floor((monitor.width - dialogWidth) / 2);
+        let maxScrollHeight = Math.min(450, Math.floor(monitor.height * 0.5));
+        this._scrollView.style = `max-height: ${maxScrollHeight}px;`;
 
+        let targetX = Math.floor((monitor.width - dialogWidth) / 2);
         let targetY = hasResults
             ? Math.floor(monitor.height * 0.20)
             : Math.floor(monitor.height * 0.40);
@@ -196,7 +213,6 @@ const GnomeLensUI = GObject.registerClass({
         if (this._stageCaptureConnected) {
             return;
         }
-
         global.stage.connectObject('captured-event', this._onCapturedEvent.bind(this), this);
         this._stageCaptureConnected = true;
     }
@@ -205,7 +221,6 @@ const GnomeLensUI = GObject.registerClass({
         if (!this._stageCaptureConnected) {
             return;
         }
-
         global.stage.disconnectObject(this);
         this._stageCaptureConnected = false;
     }
@@ -217,22 +232,18 @@ const GnomeLensUI = GObject.registerClass({
 
         if (event.type() === Clutter.EventType.KEY_PRESS) {
             let symbol = event.get_key_symbol();
-
             if (symbol === Clutter.KEY_Escape) {
                 this.close(true);
                 return Clutter.EVENT_STOP;
             }
         }
-
         return Clutter.EVENT_PROPAGATE;
     }
 
     _pushModal() {
         let grab = Main.pushModal(this);
-
         this._modalPushed = !!grab;
         this._modalGrab = grab && grab !== true ? grab : null;
-
         if (!this._modalPushed) {
             console.warn('[Gnome Lens] Main.pushModal() failed. Input may not be grabbed.');
         }
@@ -242,7 +253,6 @@ const GnomeLensUI = GObject.registerClass({
         if (!this._modalPushed && !this._modalGrab) {
             return;
         }
-
         let grab = this._modalGrab;
         this._modalGrab = null;
         this._modalPushed = false;
@@ -265,7 +275,6 @@ const GnomeLensUI = GObject.registerClass({
 
         this.isOpen = true;
         this.isClosing = false;
-
         this.show();
         this.reactive = true;
         this._dialog.reactive = true;
@@ -276,13 +285,14 @@ const GnomeLensUI = GObject.registerClass({
 
         this._pushModal();
         this._connectStageCapture();
-
         this._historyIndex = -1;
+
         this._updatePosition(this._hasResults, false);
 
         this._dialog.remove_all_transitions();
         this._dialog.set_scale(0.9, 0.9);
         this._dialog.set_opacity(0);
+
         this._dialog.ease({
             scale_x: 1.0,
             scale_y: 1.0,
@@ -306,12 +316,12 @@ const GnomeLensUI = GObject.registerClass({
         }
 
         this.isClosing = true;
-
         this.reactive = false;
         this._dialog.reactive = false;
 
         this._cancelBackendRequest();
         this._stopAnimation();
+        this._stopSearchPulse();
 
         if (this._debounceId > 0) {
             GLib.source_remove(this._debounceId);
@@ -351,7 +361,6 @@ const GnomeLensUI = GObject.registerClass({
         if (this.get_parent()) {
             Main.layoutManager.uiGroup.remove_child(this);
         }
-
         this.isClosing = false;
     }
 
@@ -364,7 +373,6 @@ const GnomeLensUI = GObject.registerClass({
             this.close(true);
             return Clutter.EVENT_STOP;
         }
-
         return super.vfunc_key_press_event(keyEvent);
     }
 
@@ -409,7 +417,7 @@ const GnomeLensUI = GObject.registerClass({
         if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
             if (this._selectedIndex >= 0 && this._selectedIndex < this._results.length) {
                 this._launchResult(this._results[this._selectedIndex]);
-            } else {
+            } else if (this._entry.get_text().trim().length > 0) {
                 this._extension.saveHistory(this._entry.get_text());
             }
             return Clutter.EVENT_STOP;
@@ -434,9 +442,7 @@ const GnomeLensUI = GObject.registerClass({
         if (this._selectedIndex >= 0 && this._selectedIndex < this._resultWidgets.length) {
             this._resultWidgets[this._selectedIndex].remove_style_class_name('selected');
         }
-
         this._selectedIndex = index;
-
         if (this._selectedIndex >= 0 && this._selectedIndex < this._resultWidgets.length) {
             let widget = this._resultWidgets[this._selectedIndex];
             widget.add_style_class_name('selected');
@@ -456,7 +462,6 @@ const GnomeLensUI = GObject.registerClass({
 
     _launchResult(result) {
         this._extension.saveHistory(this._entry.get_text());
-
         let uri = null;
 
         if (result.filepath) {
@@ -472,7 +477,6 @@ const GnomeLensUI = GObject.registerClass({
 
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             let launchContext = global.create_app_launch_context(0, -1);
-
             Gio.AppInfo.launch_default_for_uri_async(uri, launchContext, null, (_source, res) => {
                 try {
                     Gio.AppInfo.launch_default_for_uri_finish(res);
@@ -480,7 +484,6 @@ const GnomeLensUI = GObject.registerClass({
                     console.warn(`[Gnome Lens] Failed to launch result ${uri}: ${error}`);
                 }
             });
-
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -493,14 +496,15 @@ const GnomeLensUI = GObject.registerClass({
             this._debounceId = 0;
         }
 
-        if (text.length < 3) {
+        if (text.length < 2) {
             this._cancelBackendRequest();
             this._clearResults();
             this._stopAnimation();
+            this._stopSearchPulse();
             return;
         }
 
-        this._debounceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
+        this._debounceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 350, () => {
             this._debounceId = 0;
             this._triggerBackendSearch(text);
             return GLib.SOURCE_REMOVE;
@@ -519,7 +523,6 @@ const GnomeLensUI = GObject.registerClass({
             widget.destroy();
         }
         this._resultWidgets = [];
-
         this._updatePosition(false, true);
     }
 
@@ -528,24 +531,29 @@ const GnomeLensUI = GObject.registerClass({
             this._cancellable.cancel();
             this._cancellable = null;
         }
-
         if (this._inputStream) {
-            this._inputStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+            try { this._inputStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {}); } catch(e) {}
             this._inputStream = null;
         }
-
         if (this._outputStream) {
-            this._outputStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+            try { this._outputStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {}); } catch(e) {}
             this._outputStream = null;
         }
-
+        if (this._connection) {
+            try { this._connection.close(null); } catch (e) {}
+            this._connection = null;
+        }
         if (this._socketClient) {
             this._socketClient = null;
         }
+        
+        this._stopSearchPulse();
     }
 
     _triggerBackendSearch(query) {
         this._cancelBackendRequest();
+        this._startSearchPulse();
+
         this._cancellable = new Gio.Cancellable();
         this._socketClient = new Gio.SocketClient();
 
@@ -553,23 +561,28 @@ const GnomeLensUI = GObject.registerClass({
         let address = Gio.UnixSocketAddress.new(socketPath);
 
         this._socketClient.connect_async(address, this._cancellable, (client, res) => {
-            let connection;
             try {
-                connection = client.connect_finish(res);
+                this._connection = client.connect_finish(res);
             } catch (error) {
-                this._setStatus('Daemon offline or unreachable.');
+                if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
+                    this._setStatus('Daemon offline or unreachable.');
+                }
+                this._stopSearchPulse();
                 return;
             }
 
-            this._outputStream = connection.get_output_stream();
-            this._inputStream = new Gio.DataInputStream({ base_stream: connection.get_input_stream() });
+            this._outputStream = this._connection.get_output_stream();
+            this._inputStream = new Gio.DataInputStream({ base_stream: this._connection.get_input_stream() });
 
-            let payload = JSON.stringify({ query: query }) + '\n';
+            let payload = JSON.stringify({ 
+                query: query
+            }) + '\n';
 
             this._outputStream.write_all_async(payload, GLib.PRIORITY_DEFAULT, this._cancellable, (stream, writeRes) => {
                 try {
                     stream.write_all_finish(writeRes);
                 } catch (error) {
+                    this._stopSearchPulse();
                     return;
                 }
                 this._readStream();
@@ -595,13 +608,15 @@ const GnomeLensUI = GObject.registerClass({
             }
 
             let [line] = lineData;
-            if (line) {
-                try {
-                    let parsed = JSON.parse(line);
-                    this._handleBackendMessage(parsed);
-                } catch (error) {
-                    console.warn(`[Gnome Lens] Ignoring invalid daemon JSON: ${error}`);
-                }
+            if (!line) {
+                return;
+            }
+
+            try {
+                let parsed = JSON.parse(line);
+                this._handleBackendMessage(parsed);
+            } catch (error) {
+                console.warn(`[Gnome Lens] Ignoring invalid daemon JSON: ${error}`);
             }
 
             this._readStream();
@@ -612,6 +627,7 @@ const GnomeLensUI = GObject.registerClass({
         if (data.status === 'error') {
             this._setStatus(data.message);
             this._stopAnimation();
+            this._stopSearchPulse();
             return;
         }
 
@@ -620,18 +636,14 @@ const GnomeLensUI = GObject.registerClass({
             return;
         }
 
-        if (data.status === 'done') {
+        if (data.status === 'done' || data.status === 'final') {
             this._stopAnimation();
-            return;
+            this._stopSearchPulse();
         }
 
         if (data.results && Array.isArray(data.results)) {
             this._renderResults(data.results);
-
-            if (data.status === 'final') {
-                this._stopAnimation();
-            }
-
+            
             if (data.mode === 'rag_synthesis' && data.synthesis_text) {
                 this._synthesisLabel.set_text(data.synthesis_text);
                 this._synthesisBox.show();
@@ -639,60 +651,69 @@ const GnomeLensUI = GObject.registerClass({
         }
     }
 
-    _fetchVideoThumbnail(filepath, iconActor) {
-        let hash = GLib.compute_checksum_for_string(GLib.ChecksumType.MD5, filepath, -1);
-        let thumbPath = GLib.build_filenamev([this._thumbnailsCacheDir, hash + '.png']);
-        let thumbFile = Gio.File.new_for_path(thumbPath);
+    _startSearchPulse() {
+        if (this._isSearching) return;
+        this._isSearching = true;
+        this._runSearchPulse();
+    }
 
-        thumbFile.query_info_async(Gio.FILE_ATTRIBUTE_STANDARD_TYPE, Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null, (file, res) => {
-            try {
-                file.query_info_finish(res);
-                iconActor.set_gicon(new Gio.FileIcon({ file: file }));
-                iconActor.add_style_class_name('lens-result-preview');
-                iconActor.remove_style_class_name('lens-result-icon');
-            } catch (e) {
-                this._generateVideoThumbnail(filepath, thumbPath, iconActor, thumbFile);
+    _runSearchPulse() {
+        if (!this._isSearching || !this._searchIcon) return;
+        
+        this._searchIcon.remove_all_transitions();
+        this._searchIcon.ease({
+            opacity: 100,
+            duration: 600,
+            mode: Clutter.AnimationMode.EASE_IN_OUT_QUAD,
+            onComplete: () => {
+                if (!this._isSearching) return;
+                this._searchIcon.ease({
+                    opacity: 255,
+                    duration: 600,
+                    mode: Clutter.AnimationMode.EASE_IN_OUT_QUAD,
+                    onComplete: () => {
+                        this._runSearchPulse();
+                    }
+                });
             }
         });
     }
 
-    _generateVideoThumbnail(filepath, thumbPath, iconActor, thumbFile) {
-        let argv = ['ffmpegthumbnailer', '-i', filepath, '-o', thumbPath, '-t', '10', '-s', '256'];
-        
-        try {
-            let proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
-            proc.wait_check_async(null, (obj, res) => {
-                try {
-                    if (obj.wait_check_finish(res)) {
-                        iconActor.set_gicon(new Gio.FileIcon({ file: thumbFile }));
-                        iconActor.add_style_class_name('lens-result-preview');
-                        iconActor.remove_style_class_name('lens-result-icon');
-                    }
-                } catch (err) {
-                    this._generateVideoThumbnailFallback(filepath, thumbPath, iconActor, thumbFile);
-                }
-            });
-        } catch (spawnErr) {
-            this._generateVideoThumbnailFallback(filepath, thumbPath, iconActor, thumbFile);
+    _stopSearchPulse() {
+        this._isSearching = false;
+        if (this._searchIcon) {
+            this._searchIcon.remove_all_transitions();
+            this._searchIcon.set_opacity(255);
         }
     }
 
-    _generateVideoThumbnailFallback(filepath, thumbPath, iconActor, thumbFile) {
-        let argv = ['totem-video-thumbnailer', '-s', '256', filepath, thumbPath];
-        try {
-            let proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
-            proc.wait_check_async(null, (obj, res) => {
+    _fetchThumbnailAsync(filepath, iconActor, fallbackIconName) {
+        let file = Gio.File.new_for_path(filepath);
+        let uri = file.get_uri();
+        let hash = GLib.compute_checksum_for_string(GLib.ChecksumType.MD5, uri, -1);
+        
+        let paths = [
+            GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'normal', hash + '.png']),
+            GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'large', hash + '.png'])
+        ];
+
+        let checkNext = (index) => {
+            if (index >= paths.length) return;
+            
+            let thumbFile = Gio.File.new_for_path(paths[index]);
+            thumbFile.query_info_async(Gio.FILE_ATTRIBUTE_STANDARD_TYPE, Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null, (f, res) => {
                 try {
-                    if (obj.wait_check_finish(res)) {
-                        iconActor.set_gicon(new Gio.FileIcon({ file: thumbFile }));
-                        iconActor.add_style_class_name('lens-result-preview');
-                        iconActor.remove_style_class_name('lens-result-icon');
-                    }
-                } catch (err) {
+                    f.query_info_finish(res);
+                    iconActor.set_gicon(new Gio.FileIcon({ file: thumbFile }));
+                    iconActor.add_style_class_name('lens-result-preview');
+                    iconActor.remove_style_class_name('lens-result-icon');
+                } catch (e) {
+                    checkNext(index + 1);
                 }
             });
-        } catch (spawnErr) {
-        }
+        };
+
+        checkNext(0);
     }
 
     _renderResults(resultsArray) {
@@ -703,7 +724,9 @@ const GnomeLensUI = GObject.registerClass({
             this._updatePosition(true, true);
         }
 
-        for (let i = 0; i < resultsArray.length; i++) {
+        let maxRender = Math.min(resultsArray.length, 30);
+
+        for (let i = 0; i < maxRender; i++) {
             let res = resultsArray[i];
 
             let itemBox = new St.BoxLayout({
@@ -724,13 +747,13 @@ const GnomeLensUI = GObject.registerClass({
             let isImagePreview = false;
             let isVideoPreview = false;
             let iconActor;
-
             let iconName = 'text-x-generic-symbolic';
             
             if (res.metadata && res.metadata.filetype && res.filepath) {
                 let ext = res.metadata.filetype.toLowerCase();
                 if (['png', 'jpg', 'jpeg', 'bmp', 'webp', 'svg'].includes(ext)) {
                     isImagePreview = true;
+                    iconName = 'image-x-generic-symbolic';
                 } else if (['mp4', 'mkv', 'webm', 'avi'].includes(ext)) {
                     isVideoPreview = true;
                     iconName = 'video-x-generic-symbolic';
@@ -740,25 +763,16 @@ const GnomeLensUI = GObject.registerClass({
                     iconName = 'x-office-spreadsheet-symbolic';
                 }
             }
-
             if (res.plugin_id === 'plugin:email') iconName = 'mail-unread-symbolic';
             if (res.plugin_id === 'plugin:math') iconName = 'accessories-calculator-symbolic';
 
-            if (isImagePreview && res.filepath) {
-                let file = Gio.File.new_for_path(res.filepath);
-                iconActor = new St.Icon({
-                    gicon: new Gio.FileIcon({ file: file }),
-                    style_class: 'lens-result-preview',
-                });
-            } else {
-                iconActor = new St.Icon({
-                    icon_name: iconName,
-                    style_class: 'lens-result-icon',
-                });
-                
-                if (isVideoPreview && res.filepath) {
-                    this._fetchVideoThumbnail(res.filepath, iconActor);
-                }
+            iconActor = new St.Icon({
+                icon_name: iconName,
+                style_class: 'lens-result-icon',
+            });
+
+            if ((isImagePreview || isVideoPreview) && res.filepath) {
+                this._fetchThumbnailAsync(res.filepath, iconActor, iconName);
             }
 
             itemBox.add_child(iconActor);
@@ -834,35 +848,28 @@ const GnomeLensUI = GObject.registerClass({
             GLib.source_remove(this._debounceId);
             this._debounceId = 0;
         }
-
         this._disconnectStageCapture();
         this._popModal();
-
         if (this.isOpen || this.isClosing) {
             this.isOpen = false;
             this.isClosing = false;
             global.stage.set_key_focus(null);
-
             if (this.get_parent()) {
                 Main.layoutManager.uiGroup.remove_child(this);
             }
         }
-
         this._cancelBackendRequest();
         this._stopAnimation();
-
         this.remove_all_transitions();
         if (this._dialog) {
             this._dialog.remove_all_transitions();
         }
-
         for (let widget of this._resultWidgets) {
             if (widget) {
                 widget.reactive = false;
                 widget.remove_all_transitions();
             }
         }
-
         this.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
         super.destroy();
@@ -892,13 +899,11 @@ const GnomeLensIndicator = GObject.registerClass(
 
         _onCapturedEvent(actor, event) {
             let type = event.type();
-
             if (type !== Clutter.EventType.BUTTON_PRESS && type !== Clutter.EventType.BUTTON_RELEASE) {
                 return Clutter.EVENT_PROPAGATE;
             }
 
             let button = event.get_button();
-
             if (button === 1 || button === 3) {
                 if (type === Clutter.EventType.BUTTON_RELEASE) {
                     if (button === 1) {
@@ -925,8 +930,8 @@ const GnomeLensIndicator = GObject.registerClass(
 
             if (this._settings.get_boolean('enable-history')) {
                 let history = this._settings.get_strv('search-history');
-
                 let historySection = new PopupMenu.PopupMenuSection();
+
                 if (history.length === 0) {
                     let emptyItem = new PopupMenu.PopupMenuItem('No recent searches');
                     emptyItem.setSensitive(false);
@@ -964,7 +969,6 @@ export default class GnomeLensExtension extends Extension {
     enable() {
         this._settings = this.getSettings('org.gnome.shell.extensions.gnome-lens');
         this._ui = null;
-
         this._indicator = new GnomeLensIndicator(this, this._settings);
         Main.panel.addToStatusArea('gnome-lens', this._indicator);
 
@@ -1018,11 +1022,9 @@ export default class GnomeLensExtension extends Extension {
         if (!this._ui) {
             this._ui = new GnomeLensUI(this._settings, this);
         }
-
         if (!this._ui.isOpen) {
             this._ui.open();
         }
-
         this._ui.setQuery(query);
     }
 
@@ -1030,6 +1032,7 @@ export default class GnomeLensExtension extends Extension {
         if (!this._settings.get_boolean('enable-history')) {
             return;
         }
+
         if (!query || query.trim().length === 0) {
             return;
         }
@@ -1043,6 +1046,7 @@ export default class GnomeLensExtension extends Extension {
         }
 
         history.unshift(query);
+
         if (history.length > 10) {
             history.pop();
         }

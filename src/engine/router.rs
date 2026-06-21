@@ -1,6 +1,7 @@
 // src/engine/router.rs
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::domain::SearchQuery;
 use crate::plugins::PluginTool;
@@ -40,10 +41,54 @@ impl SystemRouter {
     where
         F: FnMut(String),
     {
+        let req_start = Instant::now();
         let parsed: Result<serde_json::Value, _> = serde_json::from_str(request_payload);
         
-        // PHASE 1: Intercept Vision IPC Requests from GNOME Extension
         if let Ok(ref json) = parsed {
+            // PHASE 0: Intercept Configuration Generic Requests
+            if json["action"].as_str() == Some("get_config") {
+                let config_dir = format!("{}/.config/gnome-lens", std::env::var("HOME").unwrap_or_default());
+                let config_path = format!("{}/models.json", config_dir);
+                let content = std::fs::read_to_string(&config_path).unwrap_or_else(|_| "{}".to_string());
+                let parsed_config: serde_json::Value = serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
+                
+                send_chunk(serde_json::json!({
+                    "status": "config_data",
+                    "data": parsed_config
+                }).to_string());
+                return;
+            }
+
+            if json["action"].as_str() == Some("update_config") {
+                if let Some(key) = json["key"].as_str() {
+                    let value = &json["value"];
+                    
+                    // Route to specific managers based on the configuration key
+                    if key == "active_model" {
+                        if let Some(model_id) = value.as_str() {
+                            send_chunk(serde_json::json!({"status": "processing", "message": "Initiating model switch..."}).to_string());
+                            
+                            match self.llm.switch_model(model_id, &mut send_chunk) {
+                                Ok(_) => {
+                                    send_chunk(serde_json::json!({
+                                        "status": "done",
+                                        "message": "Model swapped successfully."
+                                    }).to_string());
+                                },
+                                Err(e) => {
+                                    send_chunk(serde_json::json!({
+                                        "status": "error",
+                                        "message": e
+                                    }).to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+
+            // PHASE 1: Intercept Vision IPC Requests
             if json["action"].as_str() == Some("extract_snip") {
                 if let Some(path) = json["path"].as_str() {
                     send_chunk(serde_json::json!({"status": "processing", "message": "Analyzing image..."}).to_string());
@@ -56,12 +101,13 @@ impl SystemRouter {
                 } else {
                     send_chunk(r#"{"status": "error", "message": "Missing path for extraction"}"#.to_string());
                 }
+                println!("[Router DEBUG] Vision extraction completed in {:.2?}", req_start.elapsed());
                 return;
             }
         }
 
         let query_text = match parsed {
-            Ok(json) => json["query"].as_str().unwrap_or("").to_string(),
+            Ok(ref json) => json["query"].as_str().unwrap_or("").to_string(),
             Err(_) => {
                 send_chunk(r#"{"status": "error", "message": "Invalid JSON"}"#.to_string());
                 return;
@@ -100,8 +146,10 @@ impl SystemRouter {
             }
         }
 
-        let intent = LlmService::determine_intent(&search_query.raw_text, search_query.is_synthesis_request);
-
+        // =====================================================================
+        // PHASE 1: EXECUTE FAST PASS FIRST (Instant UI Feedback)
+        // =====================================================================
+        let fp_start = Instant::now();
         let mut fast_results = Vec::new();
         let mut handled = false;
 
@@ -118,23 +166,37 @@ impl SystemRouter {
                 fast_results = vector_plugin.execute(&search_query);
             }
         }
+        println!("[Router DEBUG] Plugins & Vector Search took: {:.2?}", fp_start.elapsed());
 
-        // We strip the payload context before piping to the socket
+        // Strip the payload context before piping to the socket to prevent IPC bloat
         let partial_payload: Vec<_> = fast_results.iter().map(|r| {
             let mut c = r.clone();
             c.full_context = None;
             c
         }).collect();
 
+        // Fire the fast pass results to the GNOME frontend instantly
         send_chunk(serde_json::json!({
             "status": "partial",
             "mode": "fast_pass",
             "results": partial_payload
         }).to_string());
 
+        // =====================================================================
+        // PHASE 2: ZERO-SHOT INTENT ROUTING (Background LLM execution)
+        // =====================================================================
+        let intent_start = Instant::now();
+        
+        // Gated by the fast lexical pre-filter in llm.rs to guarantee <1ms execution on standard queries
+        let intent = self.llm.determine_intent(&search_query.raw_text, search_query.is_synthesis_request);
+        
+        println!("[Router DEBUG] LLM intent determination took: {:.2?}", intent_start.elapsed());
+
+        let phase_start = Instant::now();
         match intent {
             LlmIntent::Skip => {
                 send_chunk(serde_json::json!({"status": "done"}).to_string());
+                println!("[Router DEBUG] Skip Intent finished in {:.2?}", phase_start.elapsed());
             },
             
             LlmIntent::FilterResults => {
@@ -152,15 +214,19 @@ impl SystemRouter {
                     "mode": "llm_filtered",
                     "results": final_payload
                 }).to_string());
+                println!("[Router DEBUG] FilterResults Intent finished in {:.2?}", phase_start.elapsed());
             },
 
             LlmIntent::RefineSearch => {
+                send_chunk(serde_json::json!({"status": "processing", "message": "Applying temporal boundaries..."}).to_string());
+                
                 self.llm.apply_temporal_heuristics(&mut search_query);
                 let mut llm_results = Vec::new();
                 if let Some(vector_plugin) = self.plugins.iter().find(|p| p.id() == "plugin:vector_db") {
                     llm_results = vector_plugin.execute(&search_query);
                 }
                 
+                // Deduplicate results that were already in the fast pass
                 llm_results.retain(|res| !partial_payload.iter().any(|fast_res| fast_res.id == res.id));
 
                 let final_payload: Vec<_> = llm_results.into_iter().map(|mut r| {
@@ -173,6 +239,7 @@ impl SystemRouter {
                     "mode": "llm_enhanced",
                     "results": final_payload
                 }).to_string());
+                println!("[Router DEBUG] RefineSearch Intent finished in {:.2?}", phase_start.elapsed());
             },
             
             LlmIntent::SynthesizeAnswer => {
@@ -192,7 +259,10 @@ impl SystemRouter {
                     "synthesis_text": answer.trim(),
                     "results": final_payload
                 }).to_string());
+                println!("[Router DEBUG] SynthesizeAnswer Intent finished in {:.2?}", phase_start.elapsed());
             }
         }
+
+        println!("[Router DEBUG] Total request routing took: {:.2?}", req_start.elapsed());
     }
 }

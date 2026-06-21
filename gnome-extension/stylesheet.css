@@ -1,21 +1,17 @@
 .lens-backdrop {
     background-color: rgba(0, 0, 0, 0.4);
 }
-
 .lens-dialog {
     background-color: rgba(30, 30, 30, 0.95);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 16px;
     box-shadow: 0px 15px 50px rgba(0, 0, 0, 0.5);
-    width: 850px;
     padding: 8px;
 }
-
 .lens-entry-container {
     padding: 12px 16px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
-
 .lens-entry {
     color: #ffffff;
     font-size: 24pt;
@@ -25,78 +21,62 @@
     box-shadow: none;
     selection-background-color: rgba(53, 132, 228, 0.5);
 }
-
 .lens-entry:focus {
     border: none;
     box-shadow: none;
 }
-
 .lens-close-button {
     padding: 8px;
-    border-radius: 24px; /* FIX: GNOME Shell does not support percentages */
+    border-radius: 24px;
     color: rgba(255, 255, 255, 0.5);
 }
-
 .lens-close-button:hover {
     background-color: rgba(255, 255, 255, 0.1);
     color: #ffffff;
 }
-
 .lens-results-scroll {
-    max-height: 450px;
     padding-top: 8px;
 }
-
 .lens-result-item {
     padding: 12px 16px;
     border-radius: 8px;
     spacing: 12px;
 }
-
 .lens-result-item:hover {
     background-color: rgba(255, 255, 255, 0.05);
 }
-
 .lens-result-item.selected {
     background-color: rgba(53, 132, 228, 0.8);
 }
-
 .lens-result-icon {
     icon-size: 32px;
 }
-
 .lens-result-preview {
     border-radius: 4px;
     icon-size: 48px;
 }
-
 .lens-result-text-box {
     spacing: 4px;
 }
-
 .lens-result-title {
     color: #ffffff;
     font-size: 13pt;
     font-weight: bold;
 }
-
 .lens-result-snippet {
     color: rgba(255, 255, 255, 0.7);
     font-size: 11pt;
 }
-
 .lens-status-container {
     padding: 12px 16px;
     border-top: 1px solid rgba(255, 255, 255, 0.05);
     spacing: 8px;
 }
-
 .lens-status-label {
     color: #8ff0a4;
     font-size: 11pt;
     font-weight: 500;
 }
-
 .lens-synthesis-text {
     color: #ffffff;
     font-size: 12pt;
