@@ -36,6 +36,7 @@ const GnomeLensUI = GObject.registerClass({
         this._resultWidgets = [];
         this._selectedIndex = -1;
         this._hasResults = false;
+        this._historyIndex = -1;
 
         this._llmTimerId = 0;
         this._llmDotCount = 0;
@@ -48,6 +49,12 @@ const GnomeLensUI = GObject.registerClass({
 
         this.isOpen = false;
         this.isClosing = false;
+
+        this._thumbnailsCacheDir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'gnome-lens', 'thumbnails']);
+        let dirFile = Gio.File.new_for_path(this._thumbnailsCacheDir);
+        if (!dirFile.query_exists(null)) {
+            try { dirFile.make_directory_with_parents(null); } catch(e) {}
+        }
 
         this._buildUI();
 
@@ -153,9 +160,13 @@ const GnomeLensUI = GObject.registerClass({
     _updatePosition(hasResults = false, animate = true) {
         this._hasResults = hasResults;
         let monitor = Main.layoutManager.primaryMonitor;
+        
+        this.set_position(monitor.x, monitor.y);
         this.set_size(monitor.width, monitor.height);
 
-        let dialogWidth = 650;
+        let dialogWidth = 850;
+        this._dialog.set_width(dialogWidth);
+
         let targetX = Math.floor((monitor.width - dialogWidth) / 2);
 
         let targetY = hasResults
@@ -266,9 +277,8 @@ const GnomeLensUI = GObject.registerClass({
         this._pushModal();
         this._connectStageCapture();
 
-        this._entry.set_text('');
-        this._clearResults();
-        this._updatePosition(false, false);
+        this._historyIndex = -1;
+        this._updatePosition(this._hasResults, false);
 
         this._dialog.remove_all_transitions();
         this._dialog.set_scale(0.9, 0.9);
@@ -280,6 +290,10 @@ const GnomeLensUI = GObject.registerClass({
             duration: 150,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
         });
+
+        if (this._entry.get_text().length > 0) {
+            this._entry.clutter_text.set_selection(0, -1);
+        }
 
         this.grab_key_focus();
         this._entry.grab_key_focus();
@@ -363,15 +377,31 @@ const GnomeLensUI = GObject.registerClass({
         }
 
         if (symbol === Clutter.KEY_Down) {
-            if (this._results.length > 0) {
-                this._setSelectedIndex(Math.min(this._selectedIndex + 1, this._results.length - 1));
+            if (this._results.length > 0 && this._selectedIndex < this._results.length - 1) {
+                this._setSelectedIndex(this._selectedIndex + 1);
+            } else if (this._selectedIndex === -1) {
+                if (this._historyIndex > 0) {
+                    this._historyIndex--;
+                    this._loadHistoryAt(this._historyIndex);
+                } else if (this._historyIndex === 0) {
+                    this._historyIndex = -1;
+                    this._entry.set_text('');
+                }
             }
             return Clutter.EVENT_STOP;
         }
 
         if (symbol === Clutter.KEY_Up) {
-            if (this._results.length > 0) {
-                this._setSelectedIndex(Math.max(this._selectedIndex - 1, 0));
+            if (this._selectedIndex > 0) {
+                this._setSelectedIndex(this._selectedIndex - 1);
+            } else if (this._selectedIndex === 0) {
+                this._setSelectedIndex(-1);
+            } else if (this._selectedIndex === -1) {
+                let history = this._settings.get_strv('search-history') || [];
+                if (this._historyIndex < history.length - 1) {
+                    this._historyIndex++;
+                    this._loadHistoryAt(this._historyIndex);
+                }
             }
             return Clutter.EVENT_STOP;
         }
@@ -386,6 +416,18 @@ const GnomeLensUI = GObject.registerClass({
         }
 
         return Clutter.EVENT_PROPAGATE;
+    }
+
+    _loadHistoryAt(index) {
+        let history = this._settings.get_strv('search-history') || [];
+        if (index >= 0 && index < history.length) {
+            let query = history[index];
+            this._entry.set_text(query);
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                this._entry.clutter_text.set_selection(-1, -1);
+                return GLib.SOURCE_REMOVE;
+            });
+        }
     }
 
     _setSelectedIndex(index) {
@@ -597,6 +639,62 @@ const GnomeLensUI = GObject.registerClass({
         }
     }
 
+    _fetchVideoThumbnail(filepath, iconActor) {
+        let hash = GLib.compute_checksum_for_string(GLib.ChecksumType.MD5, filepath, -1);
+        let thumbPath = GLib.build_filenamev([this._thumbnailsCacheDir, hash + '.png']);
+        let thumbFile = Gio.File.new_for_path(thumbPath);
+
+        thumbFile.query_info_async(Gio.FILE_ATTRIBUTE_STANDARD_TYPE, Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null, (file, res) => {
+            try {
+                file.query_info_finish(res);
+                iconActor.set_gicon(new Gio.FileIcon({ file: file }));
+                iconActor.add_style_class_name('lens-result-preview');
+                iconActor.remove_style_class_name('lens-result-icon');
+            } catch (e) {
+                this._generateVideoThumbnail(filepath, thumbPath, iconActor, thumbFile);
+            }
+        });
+    }
+
+    _generateVideoThumbnail(filepath, thumbPath, iconActor, thumbFile) {
+        let argv = ['ffmpegthumbnailer', '-i', filepath, '-o', thumbPath, '-t', '10', '-s', '256'];
+        
+        try {
+            let proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
+            proc.wait_check_async(null, (obj, res) => {
+                try {
+                    if (obj.wait_check_finish(res)) {
+                        iconActor.set_gicon(new Gio.FileIcon({ file: thumbFile }));
+                        iconActor.add_style_class_name('lens-result-preview');
+                        iconActor.remove_style_class_name('lens-result-icon');
+                    }
+                } catch (err) {
+                    this._generateVideoThumbnailFallback(filepath, thumbPath, iconActor, thumbFile);
+                }
+            });
+        } catch (spawnErr) {
+            this._generateVideoThumbnailFallback(filepath, thumbPath, iconActor, thumbFile);
+        }
+    }
+
+    _generateVideoThumbnailFallback(filepath, thumbPath, iconActor, thumbFile) {
+        let argv = ['totem-video-thumbnailer', '-s', '256', filepath, thumbPath];
+        try {
+            let proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
+            proc.wait_check_async(null, (obj, res) => {
+                try {
+                    if (obj.wait_check_finish(res)) {
+                        iconActor.set_gicon(new Gio.FileIcon({ file: thumbFile }));
+                        iconActor.add_style_class_name('lens-result-preview');
+                        iconActor.remove_style_class_name('lens-result-icon');
+                    }
+                } catch (err) {
+                }
+            });
+        } catch (spawnErr) {
+        }
+    }
+
     _renderResults(resultsArray) {
         this._clearResults();
         this._results = resultsArray;
@@ -624,45 +722,43 @@ const GnomeLensUI = GObject.registerClass({
             }, this);
 
             let isImagePreview = false;
+            let isVideoPreview = false;
             let iconActor;
 
+            let iconName = 'text-x-generic-symbolic';
+            
             if (res.metadata && res.metadata.filetype && res.filepath) {
                 let ext = res.metadata.filetype.toLowerCase();
                 if (['png', 'jpg', 'jpeg', 'bmp', 'webp', 'svg'].includes(ext)) {
-                    let file = Gio.File.new_for_path(res.filepath);
-                    if (file.query_exists(null)) {
-                        isImagePreview = true;
-                        iconActor = new St.Icon({
-                            gicon: new Gio.FileIcon({ file: file }),
-                            style_class: 'lens-result-preview',
-                        });
-                    }
+                    isImagePreview = true;
+                } else if (['mp4', 'mkv', 'webm', 'avi'].includes(ext)) {
+                    isVideoPreview = true;
+                    iconName = 'video-x-generic-symbolic';
+                } else if (['pdf'].includes(ext)) {
+                    iconName = 'x-office-document-symbolic';
+                } else if (['xlsx', 'csv'].includes(ext)) {
+                    iconName = 'x-office-spreadsheet-symbolic';
                 }
             }
 
-            if (!isImagePreview) {
-                let iconName = 'text-x-generic-symbolic';
-                if (res.metadata && res.metadata.filetype) {
-                    let ext = res.metadata.filetype.toLowerCase();
-                    if (['pdf'].includes(ext)) {
-                        iconName = 'x-office-document-symbolic';
-                    } else if (['xlsx', 'csv'].includes(ext)) {
-                        iconName = 'x-office-spreadsheet-symbolic';
-                    } else if (['mp4', 'mkv', 'webm', 'avi'].includes(ext)) {
-                        iconName = 'video-x-generic-symbolic';
-                    }
-                }
-                if (res.plugin_id === 'plugin:email') {
-                    iconName = 'mail-unread-symbolic';
-                }
-                if (res.plugin_id === 'plugin:math') {
-                    iconName = 'accessories-calculator-symbolic';
-                }
+            if (res.plugin_id === 'plugin:email') iconName = 'mail-unread-symbolic';
+            if (res.plugin_id === 'plugin:math') iconName = 'accessories-calculator-symbolic';
 
+            if (isImagePreview && res.filepath) {
+                let file = Gio.File.new_for_path(res.filepath);
+                iconActor = new St.Icon({
+                    gicon: new Gio.FileIcon({ file: file }),
+                    style_class: 'lens-result-preview',
+                });
+            } else {
                 iconActor = new St.Icon({
                     icon_name: iconName,
                     style_class: 'lens-result-icon',
                 });
+                
+                if (isVideoPreview && res.filepath) {
+                    this._fetchVideoThumbnail(res.filepath, iconActor);
+                }
             }
 
             itemBox.add_child(iconActor);
@@ -791,22 +887,33 @@ const GnomeLensIndicator = GObject.registerClass(
             this._settings.connectObject('changed::search-history', this._buildMenu.bind(this), this);
             this._settings.connectObject('changed::enable-history', this._buildMenu.bind(this), this);
 
-            this.connectObject('button-press-event', this._onButtonPress.bind(this), this);
+            this.connectObject('captured-event', this._onCapturedEvent.bind(this), this);
         }
 
-        _onButtonPress(actor, event) {
+        _onCapturedEvent(actor, event) {
+            let type = event.type();
+
+            if (type !== Clutter.EventType.BUTTON_PRESS && type !== Clutter.EventType.BUTTON_RELEASE) {
+                return Clutter.EVENT_PROPAGATE;
+            }
+
             let button = event.get_button();
 
-            if (button === 1) {
-                if (this.menu && this.menu.isOpen) {
-                    this.menu.close();
+            if (button === 1 || button === 3) {
+                if (type === Clutter.EventType.BUTTON_RELEASE) {
+                    if (button === 1) {
+                        if (this.menu && this.menu.isOpen) {
+                            this.menu.close();
+                        }
+                        this._extension.toggleLens();
+                    } else if (button === 3) {
+                        this._buildMenu();
+                        if (this.menu) {
+                            this.menu.toggle();
+                        }
+                    }
                 }
-                this._extension.toggleLens();
-                return Clutter.EVENT_STOP;
-            } else if (button === 3) {
-                if (this.menu) {
-                    this.menu.toggle();
-                }
+                
                 return Clutter.EVENT_STOP;
             }
 
@@ -861,13 +968,8 @@ export default class GnomeLensExtension extends Extension {
         this._indicator = new GnomeLensIndicator(this, this._settings);
         Main.panel.addToStatusArea('gnome-lens', this._indicator);
 
-        Main.wm.addKeybinding(
-            'shortcut',
-            this._settings,
-            Meta.KeyBindingFlags.NONE,
-            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
-            this.toggleLens.bind(this)
-        );
+        this._settings.connectObject('changed::shortcut', this._bindShortcut.bind(this), this);
+        this._bindShortcut();
     }
 
     disable() {
@@ -883,7 +985,21 @@ export default class GnomeLensExtension extends Extension {
             this._ui = null;
         }
 
-        this._settings = null;
+        if (this._settings) {
+            this._settings.disconnectObject(this);
+            this._settings = null;
+        }
+    }
+
+    _bindShortcut() {
+        Main.wm.removeKeybinding('shortcut');
+        Main.wm.addKeybinding(
+            'shortcut',
+            this._settings,
+            Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
+            this.toggleLens.bind(this)
+        );
     }
 
     toggleLens() {
