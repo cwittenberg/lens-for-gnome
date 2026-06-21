@@ -7,6 +7,7 @@ use crate::domain::SearchQuery;
 use crate::plugins::PluginTool;
 use super::llm::{LlmService, LlmIntent};
 use super::vision::VisionEngine;
+use crate::engine::HardwareManager;
 
 pub struct SystemRouter {
     plugins: Vec<Box<dyn PluginTool>>,
@@ -55,6 +56,15 @@ impl SystemRouter {
                 send_chunk(serde_json::json!({
                     "status": "config_data",
                     "data": parsed_config
+                }).to_string());
+                return;
+            }
+
+            if json["action"].as_str() == Some("get_hardware_status") {
+                let hw_status = HardwareManager::detect_hardware();
+                send_chunk(serde_json::json!({
+                    "status": "hardware_data",
+                    "data": hw_status
                 }).to_string());
                 return;
             }

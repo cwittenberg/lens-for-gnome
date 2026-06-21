@@ -11,6 +11,7 @@ use llama_cpp_2::model::params::LlamaModelParams;
 
 use crate::domain::{SearchQuery, SearchResult};
 use crate::engine::model_manager::ModelManager;
+use crate::engine::HardwareManager;
 
 #[derive(PartialEq)]
 pub enum LlmIntent {
@@ -39,7 +40,9 @@ impl LlmService {
         
         ModelManager::ensure_model_available(&model_path, &model_url);
 
-        let model_params = LlamaModelParams::default();
+        let n_gpu = HardwareManager::get_optimal_gpu_layers();
+        let model_params = LlamaModelParams::default().with_n_gpu_layers(n_gpu);
+        
         let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
             .unwrap_or_else(|_| panic!("Failed to load GGUF model from {}.", model_path));
 
@@ -61,7 +64,9 @@ impl LlmService {
         
         // Block inferences and load the newly requested model
         let mut engine_guard = self.engine.lock().unwrap();
-        let new_model = LlamaModel::load_from_file(&engine_guard.backend, &model_path, &LlamaModelParams::default())
+        
+        let n_gpu = HardwareManager::get_optimal_gpu_layers();
+        let new_model = LlamaModel::load_from_file(&engine_guard.backend, &model_path, &LlamaModelParams::default().with_n_gpu_layers(n_gpu))
             .map_err(|_| "Corrupted model file or failed to load into RAM")?;
         
         ModelManager::set_active_model(model_id)?;

@@ -1,17 +1,17 @@
 {
   "spec_version": "2026-04-02",
   "summary": {
-    "input_path": "/home/christian/Development/lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip",
+    "input_path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip",
     "finding_count": 0,
     "severity_counts": {},
     "status": "clean"
   },
   "findings": [],
   "artifacts": {
-    "root": "/home/christian/Development/lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip",
-    "metadata_path": "/home/christian/Development/lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:metadata.json",
-    "js_file_count": 2,
-    "file_count": 5,
+    "root": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip",
+    "metadata_path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:metadata.json",
+    "js_file_count": 11,
+    "file_count": 14,
     "limits": {
       "max_files": 5000,
       "max_file_size_bytes": 10485760,
@@ -22,7 +22,11 @@
     },
     "target_versions": [
       45,
-      46
+      46,
+      47,
+      48,
+      49,
+      50
     ]
   }
 }

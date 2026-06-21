@@ -29,7 +29,14 @@ fn handle_client(mut stream: UnixStream, router: Arc<SystemRouter>) {
             let request = String::from_utf8_lossy(&buffer[..bytes_read]);
             
             let start_time = Instant::now();
-            println!("[Daemon] Received Query: {}", request.trim());
+            
+            // Prevent visual confusion in the logs by distinguishing 
+            // internal IPC payloads from actual text queries.
+            if request.trim().starts_with("{\"action\":") {
+                println!("[Daemon] Received IPC Command: {}", request.trim());
+            } else {
+                println!("[Daemon] Received Search Query: {}", request.trim());
+            }
             
             router.handle_request(&request, |chunk| {
                 let mut payload = chunk.clone();
