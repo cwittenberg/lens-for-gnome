@@ -214,7 +214,8 @@ fn main() -> std::io::Result<()> {
         println!("  ✓ {} [{}]", plugin.name(), plugin.id());
     }
 
-    let router = Arc::new(SystemRouter::new(plugins, &config_dir));
+    // Pass the active vector store to the router so the AST engine can natively read metadata
+    let router = Arc::new(SystemRouter::new(plugins, Arc::clone(&vector_store), &config_dir));
 
     if Path::new(&socket_path).exists() {
         fs::remove_file(&socket_path)?;

@@ -129,6 +129,33 @@ impl VectorStore {
         Self { conn: Mutex::new(conn) }
     }
 
+    /// Dynamically extracts all unique metadata keys present across the user's entire data corpus.
+    /// This allows the LLM to know exactly what fields it can filter on without hardcoding logic.
+    pub fn get_available_metadata_keys(&self) -> Vec<String> {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        
+        let mut keys = Vec::new();
+        
+        // Use SQLite's native JSON tree walking to extract all unique top-level keys
+        if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT key FROM documents, json_each(metadata)") {
+            if let Ok(mut rows) = stmt.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    if let Ok(key) = row.get::<_, String>(0) {
+                        // Filter out internal system keys that the LLM shouldn't try to query semantically
+                        if key != "shallow_index" && key != "created_at" && key != "indexed_at" {
+                            keys.push(key);
+                        }
+                    }
+                }
+            }
+        }
+        
+        keys
+    }
+
     pub fn get_document_modified_at(&self, path: &str) -> Option<u64> {
         let conn = match self.conn.lock() {
             Ok(guard) => guard,
@@ -258,27 +285,55 @@ impl VectorStore {
         let mut fts_matches = HashMap::new();
         
         let stop_words = [
-            // Core English
             "what", "how", "why", "who", "when", "where", "the", "and", "for", "with", "that", "this", "are", "you", "from", "does", "was", "is", "a", "an", "of", "in", "to", "on", "at", "by", "about",
-            // Conversational / File-seeking filler
             "show", "me", "find", "search", "get", "looking", "documents", "document", "files", "file", "pictures", "picture", "photos", "photo", "saying", "something", "mentioning", "mentions", "containing", "like", "anything",
-            // Dutch
             "wat", "hoe", "waarom", "wie", "wanneer", "de", "het", "en", "voor", "met", "dat", "dit", "zijn", "jij", "van", "doet", "was", "is", "een", "in", "naar", "op", "bij", "over", "documenten", "bestanden", "foto", "fotos",
-            // Spanish
             "que", "como", "por", "quien", "cuando", "el", "la", "los", "las", "y", "para", "con", "eso", "esto", "son", "tu", "desde", "hace", "era", "es", "un", "una", "de", "en", "documentos", "archivos", "fotos"
         ];
+
+        // 1. Lexical Extraction Phase: Detect explicit exact phrases bound by quotes
+        let mut exact_phrases = Vec::new();
+        let mut in_quotes = false;
+        let mut current_phrase = String::new();
+        for c in raw_query_text.chars() {
+            if c == '"' {
+                if in_quotes && !current_phrase.trim().is_empty() {
+                    exact_phrases.push(current_phrase.clone());
+                    current_phrase.clear();
+                }
+                in_quotes = !in_quotes;
+            } else if in_quotes {
+                current_phrase.push(c);
+            }
+        }
         
+        // CTO FIX: Retain hyphens (-) and underscores (_) for UUIDs, server names, and API keys.
         let clean_query_text: String = raw_query_text.to_lowercase().chars()
-            .filter(|c| c.is_alphanumeric() || *c == ' ')
+            .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_')
             .collect();
 
-        // Use OR so partial semantic matches get boosted natively by FTS5
-        let safe_query = clean_query_text
+        // Build semantic OR matches
+        let semantic_query = clean_query_text
             .split_whitespace()
-            .filter(|w| w.len() > 2 && !stop_words.contains(w))
+            .filter(|w| w.len() > 2 && !stop_words.contains(w) && !exact_phrases.contains(&w.to_string()))
             .map(|w| format!("\"{}\"", w))
             .collect::<Vec<_>>()
             .join(" OR ");
+
+        // Build final FTS query merging semantic ORs with mandatory exact ANDs
+        let mut safe_query = semantic_query;
+        if !exact_phrases.is_empty() {
+            let exact_fts: String = exact_phrases.iter()
+                .map(|p| format!("\"{}\"", p.replace("\"", ""))) // Escape nested quotes just in case
+                .collect::<Vec<_>>()
+                .join(" AND ");
+                
+            if safe_query.is_empty() {
+                safe_query = exact_fts;
+            } else {
+                safe_query = format!("({}) AND {}", safe_query, exact_fts);
+            }
+        }
             
         if !safe_query.is_empty() {
             if let Ok(mut fts_stmt) = conn.prepare(
@@ -335,8 +390,7 @@ impl VectorStore {
             vector_ranks.insert(id.clone(), i + 1);
         }
 
-        // Detect if user query contains specific numbers/digits that must be matched
-        let contains_specifics = raw_query_text.split_whitespace()
+        let contains_specifics = !exact_phrases.is_empty() || raw_query_text.split_whitespace()
             .any(|w| w.chars().any(|c| c.is_ascii_digit()));
 
         // 4. Combine via Reciprocal Rank Fusion (RRF)
@@ -357,13 +411,12 @@ impl VectorStore {
             let mut rrf_score = v_score + f_score;
             let is_fts_match = f_rank < 1000.0;
 
-            // SMART BOOSTING: If the query has numbers, and it DID NOT match FTS exactly, 
-            // penalize it heavily so documents WITH the numbers bubble up.
             if contains_specifics {
                 if is_fts_match {
-                    rrf_score *= 2.0; 
+                    // Heavily boost documents containing exact phrases or serial numbers
+                    rrf_score *= 3.0; 
                 } else {
-                    rrf_score *= 0.1; 
+                    rrf_score *= 0.05; 
                 }
             }
 
@@ -374,8 +427,7 @@ impl VectorStore {
 
         scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         
-        // Expand to provide a better document pool for downstream LLM filtering
-        scored_candidates.truncate(10); 
+        scored_candidates.truncate(15); 
 
         let mut results = Vec::new();
         for (id, score, metadata_json, is_fts_match, fts_snippet, _v_rank) in scored_candidates {
@@ -385,7 +437,6 @@ impl VectorStore {
             let created_at = metadata.remove("created_at").and_then(|v| v.parse::<u64>().ok());
             let indexed_at = metadata.remove("indexed_at").and_then(|v| v.parse::<u64>().ok());
 
-            // Extract the full text directly from the FTS table, removing the need for a duplicate table
             let mut text_stmt = conn.prepare("SELECT content_text FROM documents_fts WHERE id = ?1").unwrap();
             let full_text: String = text_stmt.query_row(params![&id], |row| row.get(0)).unwrap_or_default();
 

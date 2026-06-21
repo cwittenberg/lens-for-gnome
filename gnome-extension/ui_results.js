@@ -125,7 +125,9 @@ class GnomeLensResultsList extends St.ScrollView {
         
         let paths = [
             GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'normal', hash + '.png']),
-            GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'large', hash + '.png'])
+            GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'large', hash + '.png']),
+            GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'x-large', hash + '.png']),
+            GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'xx-large', hash + '.png'])
         ];
 
         let checkNext = (index) => {
@@ -136,6 +138,7 @@ class GnomeLensResultsList extends St.ScrollView {
                 try {
                     f.query_info_finish(res);
                     iconActor.set_gicon(new Gio.FileIcon({ file: thumbFile }));
+                    iconActor.set_icon_size(32);
                     iconActor.add_style_class_name('lens-result-preview');
                     iconActor.remove_style_class_name('lens-result-icon');
                 } catch (e) {
@@ -233,33 +236,62 @@ class GnomeLensResultsList extends St.ScrollView {
 
             let isImagePreview = false;
             let isVideoPreview = false;
+            let isPdfPreview = false;
             let iconName = 'text-x-generic-symbolic';
+            let gicon = null;
             
-            if (res.metadata && res.metadata.filetype && res.filepath) {
-                let ext = res.metadata.filetype.toLowerCase();
-                if (['png', 'jpg', 'jpeg', 'bmp', 'webp', 'svg'].includes(ext)) {
+            let ext = '';
+            if (res.metadata && res.metadata.filetype) {
+                ext = res.metadata.filetype.toLowerCase();
+            } else if (res.filepath) {
+                let parts = res.filepath.split('.');
+                if (parts.length > 1) {
+                    ext = parts.pop().toLowerCase();
+                }
+            }
+
+            if (ext) {
+                if (['png', 'jpg', 'jpeg', 'bmp', 'webp', 'svg', 'gif'].includes(ext)) {
                     isImagePreview = true;
                     iconName = 'image-x-generic-symbolic';
-                } else if (['mp4', 'mkv', 'webm', 'avi'].includes(ext)) {
+                } else if (['mp4', 'mkv', 'webm', 'avi', 'mov', 'flv'].includes(ext)) {
                     isVideoPreview = true;
                     iconName = 'video-x-generic-symbolic';
                 } else if (['pdf'].includes(ext)) {
+                    isPdfPreview = true;
                     iconName = 'x-office-document-symbolic';
-                } else if (['xlsx', 'csv'].includes(ext)) {
+                } else if (['xlsx', 'csv', 'ods'].includes(ext)) {
                     iconName = 'x-office-spreadsheet-symbolic';
                 }
             }
 
             if (res.plugin_id === 'plugin:email') iconName = 'mail-unread-symbolic';
             if (res.plugin_id === 'plugin:math') iconName = 'accessories-calculator-symbolic';
-            if (res.plugin_id === 'plugin:app_launcher') iconName = 'application-x-executable-symbolic';
+            
+            if (res.plugin_id === 'plugin:app_launcher') {
+                if (res.metadata && res.metadata.icon) {
+                    if (res.metadata.icon.includes('/')) {
+                        let file = Gio.File.new_for_path(res.metadata.icon);
+                        gicon = new Gio.FileIcon({ file: file });
+                    } else {
+                        iconName = res.metadata.icon;
+                    }
+                } else {
+                    iconName = 'application-x-executable-symbolic';
+                }
+            }
 
             let iconActor = new St.Icon({
-                icon_name: iconName,
                 style_class: 'lens-result-icon',
             });
 
-            if ((isImagePreview || isVideoPreview) && res.filepath) {
+            if (gicon) {
+                iconActor.set_gicon(gicon);
+            } else {
+                iconActor.set_icon_name(iconName);
+            }
+
+            if ((isImagePreview || isVideoPreview || isPdfPreview) && res.filepath) {
                 this._fetchThumbnailAsync(res.filepath, iconActor, iconName);
             }
             itemBox.add_child(iconActor);
@@ -296,6 +328,34 @@ class GnomeLensResultsList extends St.ScrollView {
             }
 
             itemBox.add_child(textBox);
+
+            let actionBox = new St.BoxLayout({
+                vertical: false,
+                style_class: 'lens-result-action-box',
+                x_align: Clutter.ActorAlign.END,
+                x_expand: true,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+
+            if (res.filepath) {
+                let openFolderBtn = new St.Button({
+                    style_class: 'lens-result-action-btn',
+                    child: new St.Icon({ icon_name: 'folder-symbolic', icon_size: 20 }),
+                    can_focus: true,
+                });
+                
+                let handleFolderClick = () => {
+                    if (this.callbacks.onLaunch) this.callbacks.onLaunch(res, 'folder');
+                    return Clutter.EVENT_STOP;
+                };
+
+                openFolderBtn.connectObject('button-press-event', handleFolderClick, this);
+                openFolderBtn.connectObject('clicked', handleFolderClick, this);
+                
+                actionBox.add_child(openFolderBtn);
+            }
+
+            itemBox.add_child(actionBox);
             this._resultsBox.add_child(itemBox);
             this._resultWidgets.push(itemBox);
         }

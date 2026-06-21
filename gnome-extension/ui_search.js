@@ -1,3 +1,4 @@
+// gnome-extension/ui_search.js
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import St from 'gi://St';
@@ -128,6 +129,14 @@ class GnomeLensSearchBar extends St.BoxLayout {
     grabFocus() {
         this._entry.grab_key_focus();
         this._entry.clutter_text.grab_key_focus();
+        
+        let text = this._entry.get_text();
+        if (text && text.length > 0) {
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                this._entry.clutter_text.set_selection(-1, -1);
+                return GLib.SOURCE_REMOVE;
+            });
+        }
     }
 
     setCount(count) {
