@@ -27,24 +27,34 @@ impl LlmStrategy for ScriptCompilerStrategy {
             - `metadata`: A map of strings (e.g., metadata.filetype)\n\
             - `text`: The document content snippet.\n\
             - `title`: The document filename/title.\n\
-            - `regex_match(string, pattern)`: Executes a fast regex search (e.g., `regex_match(text, \"(?i)invoice.*total\")`).\n\
-            - `in_list(string, list)`: Checks if a string is in a comma-separated list (e.g., `in_list(metadata.filetype, \"pdf, docx, txt\")`).\n\
+            - `regex_match(string, pattern)`: Executes a fast regex search.\n\
+            - `regex_extract(string, pattern)`: Extracts the first regex match as a string.\n\
+            - `in_list(string, list)`: Checks if a string is in a comma-separated list.\n\
             - `days_ago(float)`: Returns the UNIX timestamp for N days ago.\n\
             - `parse_float(string)`: Safely converts a string to a number.\n\
             - `contains_ignore_case(string, search)`: Case-insensitive substring match.\n\
             \n\
-            Example Query: \"PDF invoices ending in 2024 created in the last 14 days\"\n\
+            Example Query: \"PDFs about taxes over 500\"\n\
             Example Output:\n\
             let is_pdf = metadata.filetype == \"pdf\";\n\
-            let mentions_invoice = contains_ignore_case(text, \"invoice\");\n\
-            let ends_2024 = regex_match(text, \"2024$\");\n\
-            let is_recent = parse_float(metadata.created_at) > days_ago(14.0);\n\
-            is_pdf && mentions_invoice && ends_2024 && is_recent\n\
+            let has_tax = contains_ignore_case(text, \"tax\");\n\
+            let amount_str = regex_extract(text, \"(?i)(?:total|amount|usd|\\\\$)[^\\\\d]*(\\\\d+\\\\.?\\\\d*)\");\n\
+            let amount_val = parse_float(amount_str);\n\
+            is_pdf && has_tax && amount_val > 500.0\n\
+            \n\
+            Example Query: \"Receipts from Apple or Amazon\"\n\
+            Example Output:\n\
+            let is_receipt = contains_ignore_case(text, \"receipt\");\n\
+            let from_apple = contains_ignore_case(text, \"apple\");\n\
+            let from_amazon = contains_ignore_case(text, \"amazon\");\n\
+            is_receipt && (from_apple || from_amazon)\n\
             \n\
             CRITICAL RULES:\n\
             1. Output ONLY valid Rhai script. No markdown formatting, no ```rhai blocks, no explanations.\n\
             2. The script MUST implicitly return a boolean value at the end.\n\
-            3. NEVER invent or use metadata fields that are not explicitly listed in 'Available metadata fields'. If a field like 'price' or 'author' is not in the list, you MUST use regex_match on `text` instead to find it.\n\
+            3. DEFAULT TO AND: ALWAYS use `&&` (AND) to combine conditions unless the user's prompt explicitly uses the word \"or\".\n\
+            4. USE QUERY VALUES: You MUST extract the EXACT numbers and terms requested in the user's prompt. Do NOT blindly copy numbers like '500' from the examples.\n\
+            5. ROBUST EXTRACTION: Use `(?:total|amount|usd|\\\\$)[^\\\\d]*(\\\\d+\\\\.?\\\\d*)` in regex to safely skip formatting like newlines, quotes, or commas when looking for a financial number.\n\
             \n\
             Query: \"{}\"<|im_end|>\n\
             <|im_start|>assistant\n",
@@ -52,7 +62,7 @@ impl LlmStrategy for ScriptCompilerStrategy {
         );
 
         // Lower token limit enforces concise functional chaining instead of sprawling procedural logic
-        let response = core.generate_text("SCRIPT_COMPILER_STRATEGY", &prompt, 150, is_cancelled);
+        let response = core.generate_text("SCRIPT_COMPILER_STRATEGY", &prompt, 180, is_cancelled);
         
         let mut clean_resp = response.trim().to_string();
         if clean_resp.starts_with("```rhai") {
