@@ -56,6 +56,25 @@ impl ModelManager {
         merged_config
     }
 
+    /// Fetches the config and dynamically injects the `is_installed` status for the frontend.
+    pub fn get_full_config() -> Value {
+        let mut config = Self::setup_model_config();
+        let home = env::var("HOME").unwrap_or_default();
+        
+        if let Some(models) = config["models"].as_object_mut() {
+            for (_, model) in models.iter_mut() {
+                if let Some(filename) = model["filename"].as_str() {
+                    let path = format!("{}/.local/share/gnome-lens/models/{}", home, filename);
+                    model["is_installed"] = json!(Self::model_file_exists(&path));
+                } else {
+                    model["is_installed"] = json!(false);
+                }
+            }
+        }
+        
+        config
+    }
+
     /// Resolves the absolute path and URL of the currently active model.
     pub fn get_active_model_path_and_url() -> (String, String) {
         let parsed_config = Self::setup_model_config();
@@ -107,6 +126,7 @@ impl ModelManager {
     pub fn download_model_if_needed<F>(
         model_id: &str,
         send_chunk: &mut F,
+        is_cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>
     ) -> Result<String, String>
     where
         F: FnMut(String),
@@ -160,6 +180,14 @@ impl ModelManager {
             let mut current_line = String::new();
 
             for byte in stderr.bytes() {
+                // Check if the user cancelled the download via UI
+                if is_cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = fs::remove_file(&temp_model_path);
+                    return Err("Download cancelled by user.".to_string());
+                }
+
                 let b = match byte {
                     Ok(value) => value,
                     Err(_) => continue,
@@ -170,9 +198,16 @@ impl ModelManager {
 
                 if b == b'\r' || b == b'\n' {
                     if let Some(percent) = Self::parse_curl_progress_percent(&current_line) {
-                        if percent > last_reported && percent % 2 == 0 {
+                        // Fix for HuggingFace HTTP 302 Redirects which hit 100% on the redirect payload 
+                        // instantly, blocking subsequent updates for the real file payload.
+                        if percent < last_reported && last_reported >= 95 && percent <= 5 {
+                            last_reported = -1;
+                        }
+
+                        if percent > last_reported {
                             send_chunk(json!({
-                                "status": "processing",
+                                "status": "downloading",
+                                "progress": percent,
                                 "message": format!("Downloading model ({}%)...", percent)
                             }).to_string());
 
@@ -189,7 +224,8 @@ impl ModelManager {
             if let Some(percent) = Self::parse_curl_progress_percent(&current_line) {
                 if percent > last_reported {
                     send_chunk(json!({
-                        "status": "processing",
+                        "status": "downloading",
+                        "progress": percent,
                         "message": format!("Downloading model ({}%)...", percent)
                     }).to_string());
                 }
@@ -241,21 +277,35 @@ impl ModelManager {
         Ok(())
     }
 
+    /// Deletes the local GGUF file from the disk.
+    pub fn delete_model(model_id: &str) -> Result<(), String> {
+        let parsed = Self::setup_model_config();
+        
+        let active_model = parsed["active_model"].as_str().unwrap_or("");
+        if model_id == active_model {
+            return Err("Cannot delete the currently active model.".to_string());
+        }
+
+        let model_obj = parsed["models"].get(model_id)
+            .ok_or_else(|| "Model not found in configuration.".to_string())?;
+        
+        let filename = model_obj["filename"].as_str()
+            .ok_or_else(|| "Missing filename for model.".to_string())?;
+        
+        let home = env::var("HOME").unwrap_or_default();
+        let path = format!("{}/.local/share/gnome-lens/models/{}", home, filename);
+        
+        if Path::new(&path).exists() {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+
+        Ok(())
+    }
+
     fn default_model_config() -> Value {
         json!({
-            "active_model": "qwen-2.5-3b",
+            "active_model": "qwen3-4b-q4-k-m",
             "models": {
-                "llama-3.1-8b": {
-                    "name": "Llama 3.1 (8B)",
-                    "filename": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-                    "url": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-                    "size_gb": 4.9,
-                    "ram_required_gb": 6.5,
-                    "parameters": "8.0B",
-                    "context_tokens": 131072,
-                    "category": "general",
-                    "description": "Meta's strong general-purpose model. Good for RAG and broad assistant use, but Qwen is usually better for multilingual and coding use."
-                },
                 "qwen-2.5-3b": {
                     "name": "Qwen 2.5 (3B)",
                     "filename": "qwen2.5-3b-instruct-q4_k_m.gguf",
@@ -264,19 +314,33 @@ impl ModelManager {
                     "ram_required_gb": 2.8,
                     "parameters": "3.0B",
                     "context_tokens": 32768,
-                    "category": "recommended-default",
-                    "description": "Ultra-lightweight Qwen model. Excellent default for quick local responses, translation, summarization, and reliable Vulkan compatibility."
+                    "category": "fastest",
+                    "recommended": true,
+                    "description": "Fastest useful local model in this list. Good for quick local responses, translation, summarization, OCR cleanup, and small helper tasks."
                 },
-                "qwen-2.5-7b": {
-                    "name": "Qwen 2.5 (7B)",
-                    "filename": "qwen2.5-7b-instruct-q4_k_m.gguf",
-                    "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
-                    "size_gb": 4.7,
-                    "ram_required_gb": 6.5,
-                    "parameters": "7.0B",
+                "qwen3-4b-q4-k-m": {
+                    "name": "Qwen 3 (4B)",
+                    "filename": "Qwen3-4B-Q4_K_M.gguf",
+                    "url": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
+                    "size_gb": 2.6,
+                    "ram_required_gb": 4.5,
+                    "parameters": "4.0B",
                     "context_tokens": 32768,
-                    "category": "balanced",
-                    "description": "Strong multilingual general-purpose model. Better quality than 3B while still realistic on small desktops."
+                    "category": "recommended-default",
+                    "recommended": true,
+                    "description": "Best fast and still accurate default model for this machine. Noticeably faster than 7B/8B models while staying much smarter than tiny 1B/2B models."
+                },
+                "phi-4-mini-q4-k-m": {
+                    "name": "Phi 4 Mini",
+                    "filename": "phi-4-mini-instruct-q4_k_m.gguf",
+                    "url": "https://huggingface.co/matrixportalx/Phi-4-mini-instruct-Q4_K_M-GGUF/resolve/main/phi-4-mini-instruct-q4_k_m.gguf",
+                    "size_gb": 2.5,
+                    "ram_required_gb": 4.5,
+                    "parameters": "3.8B",
+                    "context_tokens": 131072,
+                    "category": "fast-reasoning",
+                    "recommended": true,
+                    "description": "Compact Microsoft model with strong reasoning and coding ability for its size. Excellent alternative to Qwen3 4B when you want fast local reasoning."
                 },
                 "qwen2.5-coder-7b-q4-k-m": {
                     "name": "Qwen 2.5 Coder (7B)",
@@ -287,18 +351,8 @@ impl ModelManager {
                     "parameters": "7.0B",
                     "context_tokens": 32768,
                     "category": "coding",
-                    "description": "Fast coding-specialized model. Realistic default choice for code explanation, snippets, refactoring, and developer workflows."
-                },
-                "qwen2.5-coder-14b-q4-k-m": {
-                    "name": "Qwen 2.5 Coder (14B)",
-                    "filename": "qwen2.5-coder-14b-instruct-q4_k_m.gguf",
-                    "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/qwen2.5-coder-14b-instruct-q4_k_m.gguf",
-                    "size_gb": 8.9,
-                    "ram_required_gb": 12.0,
-                    "parameters": "14.7B",
-                    "context_tokens": 32768,
-                    "category": "coding",
-                    "description": "Serious local coding model. Slower than 7B, but much stronger for code reasoning and multi-step fixes."
+                    "recommended": true,
+                    "description": "Fast coding-specialized model. Best practical local coding choice when speed still matters."
                 },
                 "qwen3-8b-q4-k-m": {
                     "name": "Qwen 3 (8B)",
@@ -308,8 +362,21 @@ impl ModelManager {
                     "ram_required_gb": 7.0,
                     "parameters": "8.2B",
                     "context_tokens": 32768,
-                    "category": "general",
-                    "description": "Strong reasoning, multilingual support, and good speed at Q4_K_M."
+                    "category": "balanced-general",
+                    "recommended": true,
+                    "description": "Stronger general-purpose model than Qwen3 4B. Good when quality matters more than raw speed."
+                },
+                "qwen2.5-coder-14b-q4-k-m": {
+                    "name": "Qwen 2.5 Coder (14B)",
+                    "filename": "qwen2.5-coder-14b-instruct-q4_k_m.gguf",
+                    "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/qwen2.5-coder-14b-instruct-q4_k_m.gguf",
+                    "size_gb": 8.9,
+                    "ram_required_gb": 12.0,
+                    "parameters": "14.7B",
+                    "context_tokens": 32768,
+                    "category": "serious-coding",
+                    "recommended": true,
+                    "description": "Serious local coding model. Slower than 7B, but much stronger for code reasoning and multi-step fixes."
                 },
                 "qwen3-14b-q4-k-m": {
                     "name": "Qwen 3 (14B)",
@@ -320,6 +387,7 @@ impl ModelManager {
                     "parameters": "14.8B",
                     "context_tokens": 32768,
                     "category": "large-general",
+                    "recommended": true,
                     "description": "Higher-quality Qwen3 option that still fits comfortably in 32 GB RAM. Good for reasoning when speed matters less."
                 },
                 "qwen3-coder-30b-a3b-ud-q4-k-xl": {
@@ -332,7 +400,7 @@ impl ModelManager {
                     "context_tokens": 32768,
                     "category": "heavy-coding",
                     "recommended": false,
-                    "description": "Cool high-end local coding model for your 32 GB machine. Realistic, but heavy; expect slower startup and inference."
+                    "description": "High-end local coding model. Realistic on a 32 GB machine, but heavy; expect slower startup and inference."
                 },
                 "devstral-small-2507-q4-k-m": {
                     "name": "Devstral Small 2507",

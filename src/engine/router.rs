@@ -49,10 +49,7 @@ impl SystemRouter {
         if let Ok(ref json) = parsed {
             // PHASE 0: Intercept Configuration Generic Requests
             if json["action"].as_str() == Some("get_config") {
-                let config_dir = format!("{}/.config/gnome-lens", std::env::var("HOME").unwrap_or_default());
-                let config_path = format!("{}/models.json", config_dir);
-                let content = std::fs::read_to_string(&config_path).unwrap_or_else(|_| "{}".to_string());
-                let parsed_config: serde_json::Value = serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
+                let parsed_config = crate::engine::model_manager::ModelManager::get_full_config();
                 
                 send_chunk(serde_json::json!({
                     "status": "config_data",
@@ -70,6 +67,26 @@ impl SystemRouter {
                 return;
             }
 
+            if json["action"].as_str() == Some("delete_model") {
+                if let Some(model_id) = json["model_id"].as_str() {
+                    match crate::engine::model_manager::ModelManager::delete_model(model_id) {
+                        Ok(_) => {
+                            send_chunk(serde_json::json!({
+                                "status": "done",
+                                "message": "Model deleted successfully."
+                            }).to_string());
+                        },
+                        Err(e) => {
+                            send_chunk(serde_json::json!({
+                                "status": "error",
+                                "message": e
+                            }).to_string());
+                        }
+                    }
+                }
+                return;
+            }
+
             if json["action"].as_str() == Some("update_config") {
                 if let Some(key) = json["key"].as_str() {
                     let value = &json["value"];
@@ -79,7 +96,7 @@ impl SystemRouter {
                         if let Some(model_id) = value.as_str() {
                             send_chunk(serde_json::json!({"status": "processing", "message": "Initiating model switch..."}).to_string());
                             
-                            match self.llm.switch_model(model_id, &mut send_chunk) {
+                            match self.llm.switch_model(model_id, &mut send_chunk, Arc::clone(&is_cancelled)) {
                                 Ok(_) => {
                                     send_chunk(serde_json::json!({
                                         "status": "done",
@@ -92,6 +109,46 @@ impl SystemRouter {
                                         "message": e
                                     }).to_string());
                                 }
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            
+            if json["action"].as_str() == Some("launch_app") {
+                if let Some(exec) = json["exec"].as_str() {
+                    // Standard desktop entry exec parameter cleanup
+                    let clean_exec = exec.replace("%u", "")
+                        .replace("%U", "")
+                        .replace("%f", "")
+                        .replace("%F", "")
+                        .replace("%c", "");
+
+                    let mut parts = clean_exec.split_whitespace();
+                    if let Some(cmd) = parts.next() {
+                        let args: Vec<&str> = parts.collect();
+                        
+                        // Spawn detached so we don't hold up the daemon process loop
+                        let spawn_res = std::process::Command::new(cmd)
+                            .args(args)
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn();
+
+                        match spawn_res {
+                            Ok(_) => {
+                                send_chunk(serde_json::json!({
+                                    "status": "done",
+                                    "message": format!("Launched {}", cmd)
+                                }).to_string());
+                            },
+                            Err(e) => {
+                                send_chunk(serde_json::json!({
+                                    "status": "error",
+                                    "message": format!("Failed to launch: {}", e)
+                                }).to_string());
                             }
                         }
                     }

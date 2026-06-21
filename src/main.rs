@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use crate::vector::VectorStore;
 use crate::ingestion::IngestionPipeline;
-use crate::plugins::{MathPlugin, EmailPlugin, VectorSearchPlugin, PluginTool};
+use crate::plugins::{MathPlugin, EmailPlugin, AppLauncherPlugin, VectorSearchPlugin, PluginTool};
 use crate::engine::{SystemRouter, ThreadPool};
 use crate::triggers::{INotifyTrigger, IndexTrigger};
 
@@ -168,9 +168,11 @@ fn main() -> std::io::Result<()> {
         trigger.start(target_directory.to_string(), Arc::clone(&pipeline));
     }
 
+    // Inject App Launcher into the Fast Pass Routing Stack
     let plugins: Vec<Box<dyn PluginTool>> = vec![
         Box::new(MathPlugin),
         Box::new(EmailPlugin),
+        Box::new(AppLauncherPlugin::new()),
         Box::new(VectorSearchPlugin::new(Arc::clone(&vector_store))),
     ];
 

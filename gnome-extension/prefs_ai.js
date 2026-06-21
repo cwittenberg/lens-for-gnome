@@ -28,6 +28,34 @@ class AIEngineManager {
         
         this.statusGroup.add(this.statusRow);
 
+        this.progressBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            margin_top: 4,
+            margin_bottom: 12,
+            margin_start: 12,
+            margin_end: 12,
+            visible: false
+        });
+
+        this.progressBar = new Gtk.ProgressBar({
+            show_text: true,
+            hexpand: true,
+            valign: Gtk.Align.CENTER
+        });
+
+        this.cancelButton = new Gtk.Button({
+            icon_name: 'process-stop-symbolic',
+            valign: Gtk.Align.CENTER,
+            tooltip_text: 'Cancel Download'
+        });
+        this.cancelButton.add_css_class('destructive-action');
+        this.cancelButton.connect('clicked', () => this.cancelActiveOperations());
+
+        this.progressBox.append(this.progressBar);
+        this.progressBox.append(this.cancelButton);
+        this.statusGroup.add(this.progressBox);
+
         this.hwStatusRow = new Adw.ActionRow({ 
             title: '🖥️ Hardware Optimization', 
             subtitle: 'Detecting...' 
@@ -122,6 +150,24 @@ class AIEngineManager {
         }
     }
 
+    cancelActiveOperations() {
+        for (let c of this._cancellables) {
+            c.cancel();
+        }
+        this._cancellables = [];
+        this.spinner.stop();
+        this.spinner.set_visible(false);
+        this.progressBox.set_visible(false);
+        this.statusRow.set_title('🟡 Operation Cancelled');
+        this.statusRow.set_subtitle('Connecting...');
+
+        // Give the daemon a moment to process the disconnected socket and kill the curl thread
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+            this.requestConfig();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     requestConfig() {
         this.spinner.set_visible(true);
         this.spinner.start();
@@ -152,6 +198,30 @@ class AIEngineManager {
         });
     }
 
+    deleteModel(modelId) {
+        for (let btn of this.switchButtons) {
+            btn.set_sensitive(false);
+        }
+        this.spinner.set_visible(true);
+        this.spinner.start();
+        this.statusRow.set_title('⚙️ Deleting Model...');
+        this.statusRow.set_subtitle('Removing model files from disk.');
+
+        this._sendPayload({ action: 'delete_model', model_id: modelId }, (data) => {
+            if (data.status === 'done') {
+                this.statusRow.set_title('🟢 Service Online');
+                this.statusRow.set_subtitle('Model removed successfully.');
+                this.requestConfig();
+            } else if (data.status === 'error') {
+                this.spinner.stop();
+                this.spinner.set_visible(false);
+                this.statusRow.set_title('🔴 Engine Error');
+                this.statusRow.set_subtitle(data.message);
+                this.requestConfig();
+            }
+        });
+    }
+
     switchModel(modelId) {
         for (let btn of this.switchButtons) {
             btn.set_sensitive(false);
@@ -159,19 +229,30 @@ class AIEngineManager {
         
         this.spinner.set_visible(true);
         this.spinner.start();
+        this.progressBox.set_visible(false);
+        this.progressBar.set_fraction(0.0);
         this.statusRow.set_title('⚙️ Executing Model Hotswap...');
         this.statusRow.set_subtitle('This may take several minutes if a download is required. Do not close this window.');
         
         this._sendPayload({ action: 'update_config', key: 'active_model', value: modelId }, (data) => {
             if (data.status === 'processing') {
                 this.statusRow.set_subtitle(data.message);
+            } else if (data.status === 'downloading') {
+                this.statusRow.set_subtitle('Downloading Model...');
+                this.progressBox.set_visible(true);
+                let fraction = data.progress / 100.0;
+                if (fraction >= 0.0 && fraction <= 1.0) {
+                    this.progressBar.set_fraction(fraction);
+                }
             } else if (data.status === 'done') {
                 this.statusRow.set_title('🟢 Service Online');
                 this.statusRow.set_subtitle(data.message || 'Ready.');
+                this.progressBox.set_visible(false);
                 this.requestConfig();
             } else if (data.status === 'error') {
                 this.spinner.stop();
                 this.spinner.set_visible(false);
+                this.progressBox.set_visible(false);
                 this.statusRow.set_title('🔴 Engine Error');
                 this.statusRow.set_subtitle(data.message);
                 this.requestConfig();
@@ -193,11 +274,29 @@ class AIEngineManager {
         this.switchButtons = [];
 
         for (let [id, info] of Object.entries(models)) {
+            let isInstalled = info.is_installed === true;
+            let installedLabel = isInstalled ? ' (Installed)' : '';
+
             let row = new Adw.ActionRow({
-                title: info.name,
+                title: info.name + installedLabel,
                 subtitle: `${info.description}\nSize: ${info.size_gb}GB | RAM Required: ${info.ram_required_gb}GB | Params: ${info.parameters}`,
             });
             row.set_subtitle_lines(3);
+
+            if (isInstalled && id !== activeModelId) {
+                let delButton = new Gtk.Button({
+                    valign: Gtk.Align.CENTER,
+                    icon_name: 'user-trash-symbolic',
+                    margin_end: 6,
+                    tooltip_text: 'Delete Model'
+                });
+                delButton.add_css_class('destructive-action');
+                delButton.connect('clicked', () => {
+                    this.deleteModel(id);
+                });
+                row.add_suffix(delButton);
+                this.switchButtons.push(delButton);
+            }
 
             let button = new Gtk.Button({
                 valign: Gtk.Align.CENTER,
@@ -208,7 +307,7 @@ class AIEngineManager {
                 button.set_sensitive(false);
                 button.add_css_class('suggested-action');
             } else {
-                button.set_label('Switch');
+                button.set_label(isInstalled ? 'Switch' : 'Download & Switch');
                 button.connect('clicked', () => {
                     this.switchModel(id);
                 });

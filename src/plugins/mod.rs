@@ -2,10 +2,12 @@
 pub mod math;
 pub mod email;
 pub mod vector_search;
+pub mod app_launcher;
 
 pub use math::MathPlugin;
 pub use email::EmailPlugin;
 pub use vector_search::VectorSearchPlugin;
+pub use app_launcher::AppLauncherPlugin;
 
 use crate::domain::{SearchQuery, SearchResult};
 

@@ -54,10 +54,10 @@ impl LlmService {
         }
     }
 
-    pub fn switch_model<F>(&self, model_id: &str, send_chunk: &mut F) -> Result<(), String> 
+    pub fn switch_model<F>(&self, model_id: &str, send_chunk: &mut F, is_cancelled: Arc<AtomicBool>) -> Result<(), String> 
     where F: FnMut(String) 
     {
-        let model_path = ModelManager::download_model_if_needed(model_id, send_chunk)?;
+        let model_path = ModelManager::download_model_if_needed(model_id, send_chunk, is_cancelled)?;
 
         send_chunk(serde_json::json!({"status": "processing", "message": "Loading model into memory..."}).to_string());
         
