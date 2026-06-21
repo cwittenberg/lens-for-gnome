@@ -14,6 +14,7 @@ import { GnomeLensSynthesis, GnomeLensStatus } from './ui_status.js';
 export const GnomeLensUI = GObject.registerClass({
     GTypeName: 'GnomeLensUI',
 }, class GnomeLensUI extends St.Widget {
+
     _init(settings, extension) {
         super._init({
             name: 'GnomeLensBackdrop',
@@ -30,7 +31,6 @@ export const GnomeLensUI = GObject.registerClass({
         this._extension = extension;
         this._service = new ServiceClient();
         this._historyIndex = -1;
-
         this._modalGrab = null;
         this._modalPushed = false;
         this._stageCaptureConnected = false;
@@ -46,6 +46,49 @@ export const GnomeLensUI = GObject.registerClass({
         }, this);
 
         Main.layoutManager.connectObject('monitors-changed', this._onMonitorsChanged.bind(this), this);
+
+        // React to style changes in real-time
+        this._settings.connectObject(
+            'changed::ui-color', this._applyStyles.bind(this),
+            'changed::ui-transparency', this._applyStyles.bind(this),
+            'changed::ui-shadow', this._applyStyles.bind(this),
+            this
+        );
+        this._applyStyles();
+    }
+
+    _applyStyles() {
+        let color = this._settings.get_string('ui-color');
+        let opacity = this._settings.get_int('ui-transparency') / 100.0;
+        let shadow = this._settings.get_boolean('ui-shadow');
+        
+        let r = 30, g = 30, b = 30;
+        if (/^#[0-9A-Fa-f]{6}$/.test(color)) {
+            r = parseInt(color.slice(1, 3), 16);
+            g = parseInt(color.slice(3, 5), 16);
+            b = parseInt(color.slice(5, 7), 16);
+        }
+
+        let shadowCss = shadow ? 'box-shadow: 0px 15px 50px rgba(0, 0, 0, 0.5);' : 'box-shadow: none;';
+        let bgCss = `background-color: rgba(${r}, ${g}, ${b}, ${opacity});`;
+        
+        this._dialog.set_style(`${bgCss} ${shadowCss}`);
+    }
+
+    _getAnimationParams(baseDuration, isClose = false) {
+        if (!this._settings.get_boolean('ui-animation')) {
+            return { duration: 0, mode: Clutter.AnimationMode.EASE_OUT_QUAD };
+        }
+        let type = this._settings.get_string('ui-animation-type');
+        let mode = isClose ? Clutter.AnimationMode.EASE_IN_QUAD : Clutter.AnimationMode.EASE_OUT_QUAD;
+        
+        if (type === 'bounce') {
+            mode = isClose ? Clutter.AnimationMode.EASE_IN_BOUNCE : Clutter.AnimationMode.EASE_OUT_BOUNCE;
+        } else if (type === 'elastic') {
+            mode = isClose ? Clutter.AnimationMode.EASE_IN_ELASTIC : Clutter.AnimationMode.EASE_OUT_ELASTIC;
+        }
+        
+        return { duration: baseDuration, mode: mode };
     }
 
     _buildUI() {
@@ -141,6 +184,7 @@ export const GnomeLensUI = GObject.registerClass({
         if (activeMonitorIndex >= 0) {
             return monitors[activeMonitorIndex];
         }
+
         return Main.layoutManager.primaryMonitor;
     }
 
@@ -164,12 +208,14 @@ export const GnomeLensUI = GObject.registerClass({
         this._dialog.remove_transition('x');
         this._dialog.remove_transition('y');
 
-        if (animate) {
+        let anim = this._getAnimationParams(250, false);
+
+        if (animate && anim.duration > 0) {
             this._dialog.ease({
                 x: targetX,
                 y: targetY,
-                duration: 250,
-                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                duration: anim.duration,
+                mode: anim.mode,
             });
         } else {
             this._dialog.set_position(targetX, targetY);
@@ -204,6 +250,7 @@ export const GnomeLensUI = GObject.registerClass({
                 return Clutter.EVENT_STOP;
             }
         }
+
         return Clutter.EVENT_PROPAGATE;
     }
 
@@ -243,21 +290,27 @@ export const GnomeLensUI = GObject.registerClass({
 
         this._pushModal();
         this._connectStageCapture();
+        
         this._historyIndex = -1;
-
         this._updatePosition(this._resultsList.hasResults(), false);
-
+        
         this._dialog.remove_all_transitions();
-        this._dialog.set_scale(0.9, 0.9);
-        this._dialog.set_opacity(0);
-
-        this._dialog.ease({
-            scale_x: 1.0,
-            scale_y: 1.0,
-            opacity: 255,
-            duration: 150,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-        });
+        
+        let anim = this._getAnimationParams(150, false);
+        if (anim.duration > 0) {
+            this._dialog.set_scale(0.9, 0.9);
+            this._dialog.set_opacity(0);
+            this._dialog.ease({
+                scale_x: 1.0,
+                scale_y: 1.0,
+                opacity: 255,
+                duration: anim.duration,
+                mode: anim.mode,
+            });
+        } else {
+            this._dialog.set_scale(1.0, 1.0);
+            this._dialog.set_opacity(255);
+        }
 
         this.grab_key_focus();
         this._searchBar.grabFocus();
@@ -285,17 +338,22 @@ export const GnomeLensUI = GObject.registerClass({
             return;
         }
 
-        this._dialog.remove_all_transitions();
-        this._dialog.ease({
-            scale_x: 0.9,
-            scale_y: 0.9,
-            opacity: 0,
-            duration: 100,
-            mode: Clutter.AnimationMode.EASE_IN_QUAD,
-            onComplete: () => {
-                this._finishClose();
-            },
-        });
+        let anim = this._getAnimationParams(100, true);
+        if (anim.duration > 0) {
+            this._dialog.remove_all_transitions();
+            this._dialog.ease({
+                scale_x: 0.9,
+                scale_y: 0.9,
+                opacity: 0,
+                duration: anim.duration,
+                mode: anim.mode,
+                onComplete: () => {
+                    this._finishClose();
+                },
+            });
+        } else {
+            this._finishClose();
+        }
     }
 
     _finishClose() {
@@ -351,7 +409,9 @@ export const GnomeLensUI = GObject.registerClass({
         this._service.cancel();
         this._searchBar.startPulse();
 
-        this._service.search(query, {
+        let filterStrategy = this._settings.get_string('ai-filter-strategy');
+
+        this._service.search(query, filterStrategy, {
             onMessage: (data) => {
                 if (data.status === 'error') {
                     this._status.setStatus(data.message);
@@ -371,6 +431,7 @@ export const GnomeLensUI = GObject.registerClass({
                     if (data.results.length > 0) {
                         this._updatePosition(true, true);
                     }
+
                     if (data.mode === 'rag_synthesis' && data.synthesis_result) {
                         this._synthesis.setSynthesis(data.synthesis_result);
                     }
@@ -400,6 +461,7 @@ export const GnomeLensUI = GObject.registerClass({
         }
 
         this._service.cancel();
+        this._settings.disconnectObject(this);
         this.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
         super.destroy();

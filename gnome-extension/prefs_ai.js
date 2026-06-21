@@ -1,3 +1,4 @@
+// gnome-extension/prefs_ai.js
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
@@ -327,11 +328,44 @@ class AIEngineManager {
     }
 }
 
-export function buildAIPage(window) {
+export function buildAIPage(settings, window) {
     const page = new Adw.PreferencesPage({
          title: 'AI Engine',
          icon_name: 'applications-engineering-symbolic'
      });
+
+    // Strategy & Behavior Settings
+    const behaviorGroup = new Adw.PreferencesGroup({ title: 'Engine Behavior' });
+    
+    const strategyModel = Gtk.StringList.new([
+        'Auto (Recommended)', 
+        'Prefer Mathematical AST', 
+        'Prefer Rhai Scripting', 
+        'Disable AI Filtering'
+    ]);
+    
+    const strategyRow = new Adw.ComboRow({
+        title: 'Data Filtering Strategy',
+        subtitle: 'Determines how the AI converts your natural language into database queries.',
+        model: strategyModel
+    });
+    
+    let currentStrat = settings.get_string('ai-filter-strategy');
+    if (currentStrat === 'ast-only') strategyRow.selected = 1;
+    else if (currentStrat === 'script-only') strategyRow.selected = 2;
+    else if (currentStrat === 'disabled') strategyRow.selected = 3;
+    else strategyRow.selected = 0;
+
+    strategyRow.connect('notify::selected', () => {
+        let s = strategyRow.selected;
+        if (s === 1) settings.set_string('ai-filter-strategy', 'ast-only');
+        else if (s === 2) settings.set_string('ai-filter-strategy', 'script-only');
+        else if (s === 3) settings.set_string('ai-filter-strategy', 'disabled');
+        else settings.set_string('ai-filter-strategy', 'auto');
+    });
+    
+    behaviorGroup.add(strategyRow);
+    page.add(behaviorGroup);
 
     let aiManager = new AIEngineManager(page);
 

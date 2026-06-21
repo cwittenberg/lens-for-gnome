@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::domain::{SearchQuery, SearchResult};
 use crate::plugins::PluginTool;
@@ -10,6 +10,7 @@ use crate::vector::VectorStore;
 use super::llm::{LlmService, LlmIntent};
 use super::vision::VisionEngine;
 use crate::engine::HardwareManager;
+use fancy_regex::Regex;
 
 pub struct SystemRouter {
     plugins: Vec<Box<dyn PluginTool>>,
@@ -42,8 +43,97 @@ impl SystemRouter {
         HashMap::new() 
     }
 
+    /// Converts a LISP-JSON AST array into a human-readable boolean math string
+    fn ast_to_math_string(ast: &serde_json::Value) -> String {
+        if let Some(arr) = ast.as_array() {
+            if arr.is_empty() { return String::new(); }
+            let op = arr[0].as_str().unwrap_or("").to_uppercase();
+
+            match op.as_str() {
+                "AND" | "OR" => {
+                    let mut parts = Vec::new();
+                    for i in 1..arr.len() {
+                        let part = Self::ast_to_math_string(&arr[i]);
+                        if !part.is_empty() {
+                            parts.push(part);
+                        }
+                    }
+                    if parts.is_empty() {
+                        String::new()
+                    } else if parts.len() == 1 {
+                        parts[0].clone()
+                    } else {
+                        let symbol = if op == "AND" { " ∧ " } else { " ∨ " };
+                        format!("({})", parts.join(symbol))
+                    }
+                }
+                "NOT" => {
+                    if arr.len() >= 2 {
+                        let inner = Self::ast_to_math_string(&arr[1]);
+                        format!("¬({})", inner)
+                    } else {
+                        String::new()
+                    }
+                }
+                "CONTAINS" => {
+                    if arr.len() >= 2 {
+                        format!("∋ \"{}\"", arr[1].as_str().unwrap_or(""))
+                    } else {
+                        String::new()
+                    }
+                }
+                "EQ" => {
+                    if arr.len() >= 3 {
+                        let key = arr[1].as_str().unwrap_or("");
+                        let val = if let Some(s) = arr[2].as_str() { format!("\"{}\"", s) } else { arr[2].to_string() };
+                        format!("{} = {}", key, val)
+                    } else {
+                        String::new()
+                    }
+                }
+                "NEQ" => {
+                    if arr.len() >= 3 {
+                        let key = arr[1].as_str().unwrap_or("");
+                        let val = if let Some(s) = arr[2].as_str() { format!("\"{}\"", s) } else { arr[2].to_string() };
+                        format!("{} ≠ {}", key, val)
+                    } else {
+                        String::new()
+                    }
+                }
+                "GT" => {
+                    if arr.len() >= 3 {
+                        let key = arr[1].as_str().unwrap_or("");
+                        let val = arr[2].to_string();
+                        format!("{} > {}", key, val)
+                    } else {
+                        String::new()
+                    }
+                }
+                "LT" => {
+                    if arr.len() >= 3 {
+                        let key = arr[1].as_str().unwrap_or("");
+                        let val = arr[2].to_string();
+                        format!("{} < {}", key, val)
+                    } else {
+                        String::new()
+                    }
+                }
+                "SEARCH" => {
+                    if arr.len() >= 2 {
+                        format!("≅ \"{}\"", arr[1].as_str().unwrap_or(""))
+                    } else {
+                        String::new()
+                    }
+                }
+                _ => String::new(),
+            }
+        } else {
+            String::new()
+        }
+    }
+
     /// Recursively executes the Dynamic LISP-JSON Abstract Syntax Tree against a set of candidates.
-    /// Performs exact math and logical matches instantaneously in pure Rust.
+    /// Retained as a fallback mechanism if script compilation fails.
     fn execute_ast(
         ast: &serde_json::Value,
         mut candidates: Vec<SearchResult>,
@@ -72,23 +162,26 @@ impl SystemRouter {
                     for i in 1..arr.len() {
                         let res = Self::execute_ast(&arr[i], candidates.clone(), llm, Arc::clone(&is_cancelled));
                         for doc in res {
-                            union_map.insert(doc.id.clone(), doc);
+                            union_map.entry(doc.id.clone()).or_insert(doc);
                         }
                     }
                     return union_map.into_values().collect();
                 }
                 "NOT" => {
                     if arr.len() >= 2 {
-                        // Recursively execute the nested logic to find what MUST BE EXCLUDED
                         let to_exclude = Self::execute_ast(&arr[1], candidates.clone(), llm, Arc::clone(&is_cancelled));
                         let exclude_ids: std::collections::HashSet<_> = to_exclude.into_iter().map(|d| d.id).collect();
                         
-                        // Set Subtraction: Retain only the candidates that did NOT match the inner expression
                         candidates.retain(|doc| !exclude_ids.contains(&doc.id));
                         
+                        let reason_str = "Survived exclusionary filter".to_string();
                         for doc in &mut candidates {
                             doc.ai_matched = Some(true);
-                            doc.ai_reasoning = Some("Survived exclusionary NOT filter".to_string());
+                            if let Some(prev) = &doc.ai_reasoning {
+                                doc.ai_reasoning = Some(format!("{} ∧ {}", prev, reason_str));
+                            } else {
+                                doc.ai_reasoning = Some(reason_str.clone());
+                            }
                         }
                         return candidates;
                     }
@@ -101,9 +194,15 @@ impl SystemRouter {
                             let title = doc.title.to_lowercase();
                             text.contains(&substring) || title.contains(&substring)
                         });
+                        
+                        let reason_str = format!("Contains '{}'", substring);
                         for doc in &mut candidates {
                             doc.ai_matched = Some(true);
-                            doc.ai_reasoning = Some(format!("Contains exact string: '{}'", substring));
+                            if let Some(prev) = &doc.ai_reasoning {
+                                doc.ai_reasoning = Some(format!("{} ∧ {}", prev, reason_str));
+                            } else {
+                                doc.ai_reasoning = Some(reason_str.clone());
+                            }
                         }
                         return candidates;
                     }
@@ -121,7 +220,6 @@ impl SystemRouter {
                         
                         let key_exists = candidates.iter().any(|doc| doc.metadata.contains_key(key));
                         if !key_exists {
-                            // If the LLM hallucinated a metadata field, gracefully fallback to text reading
                             let concept = format!("{} is {}", key, val_str);
                             return Self::execute_ast(&serde_json::json!(["SEARCH", concept]), candidates, llm, Arc::clone(&is_cancelled));
                         }
@@ -133,9 +231,15 @@ impl SystemRouter {
                                 false
                             }
                         });
+                        
+                        let reason_str = format!("{} == {}", key, val_str);
                         for doc in &mut candidates {
                             doc.ai_matched = Some(true);
-                            doc.ai_reasoning = Some(format!("Metadata: {} == {}", key, val_str));
+                            if let Some(prev) = &doc.ai_reasoning {
+                                doc.ai_reasoning = Some(format!("{} ∧ {}", prev, reason_str));
+                            } else {
+                                doc.ai_reasoning = Some(reason_str.clone());
+                            }
                         }
                         return candidates;
                     }
@@ -153,7 +257,6 @@ impl SystemRouter {
                         
                         let key_exists = candidates.iter().any(|doc| doc.metadata.contains_key(key));
                         if !key_exists {
-                            // Convert to an exclusionary text search if metadata hallucinated
                             let concept = format!("{} is not {}", key, val_str);
                             return Self::execute_ast(&serde_json::json!(["NOT", ["SEARCH", concept]]), candidates, llm, Arc::clone(&is_cancelled));
                         }
@@ -162,12 +265,18 @@ impl SystemRouter {
                             if let Some(meta_val) = doc.metadata.get(key) {
                                 meta_val.to_lowercase() != val_str
                             } else {
-                                true // If key is missing entirely, it is technically not equal
+                                true
                             }
                         });
+                        
+                        let reason_str = format!("{} != {}", key, val_str);
                         for doc in &mut candidates {
                             doc.ai_matched = Some(true);
-                            doc.ai_reasoning = Some(format!("Metadata: {} != {}", key, val_str));
+                            if let Some(prev) = &doc.ai_reasoning {
+                                doc.ai_reasoning = Some(format!("{} ∧ {}", prev, reason_str));
+                            } else {
+                                doc.ai_reasoning = Some(reason_str.clone());
+                            }
                         }
                         return candidates;
                     }
@@ -191,9 +300,15 @@ impl SystemRouter {
                                 } else { false }
                             } else { false }
                         });
+                        
+                        let reason_str = format!("{} {} {}", key, if op == "GT" { ">" } else { "<" }, target_val);
                         for doc in &mut candidates {
                             doc.ai_matched = Some(true);
-                            doc.ai_reasoning = Some(format!("Metadata: {} {} {}", key, if op == "GT" { ">" } else { "<" }, target_val));
+                            if let Some(prev) = &doc.ai_reasoning {
+                                doc.ai_reasoning = Some(format!("{} ∧ {}", prev, reason_str));
+                            } else {
+                                doc.ai_reasoning = Some(reason_str.clone());
+                            }
                         }
                         return candidates;
                     }
@@ -201,10 +316,22 @@ impl SystemRouter {
                 "SEARCH" => {
                     if arr.len() >= 2 {
                         let concept = arr[1].as_str().unwrap_or("");
+                        
+                        let mut previous_reasons = HashMap::new();
+                        for doc in &candidates {
+                            if let Some(r) = &doc.ai_reasoning {
+                                previous_reasons.insert(doc.id.clone(), r.clone());
+                            }
+                        }
+                        
                         let filtered = llm.filter_with_llm(concept, candidates, Arc::clone(&is_cancelled));
                         let mut passing = Vec::new();
-                        for doc in filtered {
+                        for mut doc in filtered {
                             if doc.ai_matched.unwrap_or(false) {
+                                if let Some(prev) = previous_reasons.get(&doc.id) {
+                                    let new_reason = doc.ai_reasoning.clone().unwrap_or_default();
+                                    doc.ai_reasoning = Some(format!("{} ∧ {}", prev, new_reason));
+                                }
                                 passing.push(doc);
                             }
                         }
@@ -215,6 +342,119 @@ impl SystemRouter {
             }
         }
         
+        candidates
+    }
+
+    /// Primary execution hub for the Scripting Engine Strategy.
+    fn execute_script(
+        script: &str,
+        mut candidates: Vec<SearchResult>,
+        llm: &Arc<LlmService>,
+        is_cancelled: Arc<AtomicBool>,
+    ) -> Vec<SearchResult> {
+        let mut engine = rhai::Engine::new();
+        
+        // --- Standard Library Injections ---
+        
+        // Type coercion safety
+        engine.register_fn("parse_float", |s: rhai::Dynamic| -> rhai::FLOAT {
+            if s.is_unit() { 
+                return 0.0; 
+            }
+            if let Some(float_val) = s.clone().try_cast::<rhai::FLOAT>() {
+                return float_val;
+            }
+            if let Some(int_val) = s.clone().try_cast::<i64>() {
+                return int_val as rhai::FLOAT;
+            }
+            s.to_string().parse::<rhai::FLOAT>().unwrap_or(0.0)
+        });
+
+        // Basic string tools
+        engine.register_fn("contains_ignore_case", |val: rhai::Dynamic, search: rhai::ImmutableString| -> bool {
+            if val.is_unit() { 
+                return false; 
+            }
+            val.to_string().to_lowercase().contains(&search.to_lowercase())
+        });
+
+        // Fast native Regex evaluation (Powered by fancy-regex)
+        engine.register_fn("regex_match", |val: rhai::Dynamic, pattern: rhai::ImmutableString| -> bool {
+            if val.is_unit() { 
+                return false; 
+            }
+            if let Ok(re) = Regex::new(&pattern) {
+                re.is_match(&val.to_string()).unwrap_or(false)
+            } else {
+                false
+            }
+        });
+
+        // Substring array aggregator (simulates a SQL `IN` array)
+        engine.register_fn("in_list", |val: rhai::Dynamic, comma_list: rhai::ImmutableString| -> bool {
+            if val.is_unit() { 
+                return false; 
+            }
+            let target = val.to_string().to_lowercase();
+            comma_list.split(',')
+                .map(|s| s.trim().to_lowercase())
+                .any(|item| target == item || target.contains(&item) || item.contains(&target))
+        });
+
+        // Context-aware temporal math
+        engine.register_fn("days_ago", |days: rhai::FLOAT| -> rhai::FLOAT {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as f64;
+            now - (days * 86400.0)
+        });
+
+        let ast = match engine.compile(script) {
+            Ok(ast) => ast,
+            Err(e) => {
+                println!("[Router DEBUG] Rhai script compilation failed: {}\nScript:\n{}", e, script);
+                // Fallback to the AST Search heuristic if the script fails compilation
+                return Self::execute_ast(&serde_json::json!(["SEARCH", script]), candidates, llm, Arc::clone(&is_cancelled));
+            }
+        };
+
+        candidates.retain(|doc| {
+            if is_cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                return false;
+            }
+
+            let mut scope = rhai::Scope::new();
+            
+            let mut meta_map = rhai::Map::new();
+            for (k, v) in &doc.metadata {
+                meta_map.insert(k.clone().into(), rhai::Dynamic::from(v.clone()));
+            }
+            scope.push("metadata", meta_map);
+            
+            let content = doc.full_context.as_deref().unwrap_or(&doc.snippet);
+            scope.push("text", content.to_string());
+            scope.push("title", doc.title.clone());
+
+            let result: Result<bool, Box<rhai::EvalAltResult>> = engine.eval_ast_with_scope(&mut scope, &ast);
+            
+            match result {
+                Ok(true) => true,
+                Ok(false) => false,
+                Err(e) => {
+                    println!("[Router DEBUG] Rhai script runtime error on doc {}: {}", doc.id, e);
+                    false
+                }
+            }
+        });
+        
+        for doc in &mut candidates {
+            doc.ai_matched = Some(true);
+            let reason_str = "Matched via LLM System Script".to_string();
+            if let Some(prev) = &doc.ai_reasoning {
+                doc.ai_reasoning = Some(format!("{} ∧ {}", prev, reason_str));
+            } else {
+                doc.ai_reasoning = Some(reason_str);
+            }
+        }
+
         candidates
     }
 
@@ -423,6 +663,11 @@ impl SystemRouter {
             }
         };
 
+        let filter_strategy = match parsed {
+            Ok(ref json) => json["filter_strategy"].as_str().map(|s| s.to_string()),
+            Err(_) => None,
+        };
+
         if query_text.trim().is_empty() {
             send_chunk(r#"{"status": "done", "results": []}"#.to_string());
             return;
@@ -434,6 +679,7 @@ impl SystemRouter {
             min_timestamp: None,
             max_timestamp: None,
             metadata_filters: HashMap::new(),
+            filter_strategy,
         };
 
         if search_query.is_synthesis_request {
@@ -489,7 +735,7 @@ impl SystemRouter {
         // =====================================================================
         let intent_start = Instant::now();
         
-        let intent = self.llm.determine_intent(&search_query.raw_text, search_query.is_synthesis_request, Arc::clone(&is_cancelled));
+        let intent = self.llm.determine_intent(&search_query.raw_text, search_query.is_synthesis_request, search_query.filter_strategy.clone(), Arc::clone(&is_cancelled));
         
         println!("[Router DEBUG] LLM intent determination took: {:.2?}", intent_start.elapsed());
 
@@ -500,7 +746,7 @@ impl SystemRouter {
                 println!("[Router DEBUG] Skip Intent finished in {:.2?}", phase_start.elapsed());
             },
             
-            LlmIntent::FilterResults => {
+            LlmIntent::FilterAst => {
                 send_chunk(serde_json::json!({"status": "filtering", "message": "Compiling Logic AST..."}).to_string());
                 
                 // 1. Fetch available schema keys natively from the Vector Engine
@@ -510,9 +756,11 @@ impl SystemRouter {
                 let ast = self.llm.compile_query_to_ast(&search_query.raw_text, schema_keys, Arc::clone(&is_cancelled));
                 
                 // Feedback loop: show the user the mathematical logic derived from their text
+                let math_str = Self::ast_to_math_string(&ast);
+                let display_str = if math_str.is_empty() { ast.to_string() } else { math_str };
                 send_chunk(serde_json::json!({
                     "status": "filtering", 
-                    "message": format!("Executing Filter: {}", ast.to_string())
+                    "message": format!("Executing Filter: {}", display_str)
                 }).to_string());
                 
                 // 3. Execute AST natively over the fast-pass candidates
@@ -551,7 +799,55 @@ impl SystemRouter {
                     "mode": "llm_filtered",
                     "results": final_payload
                 }).to_string());
-                println!("[Router DEBUG] FilterResults Intent finished in {:.2?}", phase_start.elapsed());
+                println!("[Router DEBUG] FilterAst Intent finished in {:.2?}", phase_start.elapsed());
+            },
+
+            LlmIntent::FilterScript => {
+                send_chunk(serde_json::json!({"status": "filtering", "message": "Compiling Logic Script..."}).to_string());
+                
+                let schema_keys = self.store.get_available_metadata_keys();
+                let script = self.llm.compile_query_to_script(&search_query.raw_text, schema_keys, Arc::clone(&is_cancelled));
+                
+                send_chunk(serde_json::json!({
+                    "status": "filtering", 
+                    "message": format!("Executing Filter Script:\n{}", script)
+                }).to_string());
+                
+                let mut ast_results = fast_results.clone();
+                let survivors = Self::execute_script(&script, fast_results, &self.llm, Arc::clone(&is_cancelled));
+                
+                let mut survivor_map = HashMap::new();
+                for s in survivors {
+                    survivor_map.insert(s.id.clone(), s);
+                }
+                
+                for doc in &mut ast_results {
+                    if let Some(survivor) = survivor_map.get(&doc.id) {
+                        doc.ai_matched = Some(true);
+                        doc.ai_reasoning = survivor.ai_reasoning.clone();
+                    } else {
+                        doc.ai_matched = Some(false);
+                        doc.ai_reasoning = Some("Excluded by execution script".to_string());
+                    }
+                }
+                
+                ast_results.sort_by(|a, b| {
+                    let a_match = a.ai_matched.unwrap_or(false);
+                    let b_match = b.ai_matched.unwrap_or(false);
+                    b_match.cmp(&a_match) 
+                });
+
+                let final_payload: Vec<_> = ast_results.into_iter().map(|mut r| {
+                    r.full_context = None;
+                    r
+                }).collect();
+
+                send_chunk(serde_json::json!({
+                    "status": "final",
+                    "mode": "llm_filtered",
+                    "results": final_payload
+                }).to_string());
+                println!("[Router DEBUG] FilterScript Intent finished in {:.2?}", phase_start.elapsed());
             },
 
             LlmIntent::RefineSearch => {

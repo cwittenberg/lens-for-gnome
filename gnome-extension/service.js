@@ -48,8 +48,8 @@ export default class ServiceClient {
         });
     }
 
-    search(query, callbacks) {
-        this.sendPayload({ query: query }, callbacks);
+    search(query, filterStrategy, callbacks) {
+        this.sendPayload({ query: query, filter_strategy: filterStrategy }, callbacks);
     }
 
     _readStream() {

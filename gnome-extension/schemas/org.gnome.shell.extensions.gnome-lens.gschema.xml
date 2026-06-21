@@ -21,7 +21,6 @@
       <summary>Saved Search History</summary>
       <description>Internal array of the most recent searches.</description>
     </key>
-
     <key name="index-full-system" type="b">
       <default>false</default>
       <summary>Index entire home directory</summary>
@@ -36,6 +35,41 @@
       <default>['.git', 'node_modules', 'target', '.cache', '.cargo', '.rustup', '.npm', '.local/share/Trash', '__pycache__', 'venv', '.idea', '.vscode']</default>
       <summary>Blacklisted folder names</summary>
       <description>Folder or file names that will be skipped during recursive index sweeps.</description>
+    </key>
+    <key name="show-document-text" type="b">
+      <default>false</default>
+      <summary>Show Indexed Document Text</summary>
+      <description>Toggle the display of the indexed text snippet in search results.</description>
+    </key>
+    <key name="ui-color" type="s">
+      <default>'#1e1e1e'</default>
+      <summary>UI Background Color</summary>
+      <description>Hex color code for the search window background.</description>
+    </key>
+    <key name="ui-transparency" type="i">
+      <default>95</default>
+      <summary>UI Transparency</summary>
+      <description>Opacity level of the search window (10 to 100).</description>
+    </key>
+    <key name="ui-shadow" type="b">
+      <default>true</default>
+      <summary>UI Shadow</summary>
+      <description>Toggle the drop shadow of the search window.</description>
+    </key>
+    <key name="ui-animation" type="b">
+      <default>true</default>
+      <summary>UI Window Animations</summary>
+      <description>Toggle opening and closing window animations.</description>
+    </key>
+    <key name="ui-animation-type" type="s">
+      <default>'standard'</default>
+      <summary>UI Animation Type</summary>
+      <description>Type of animation to use (standard, bounce, elastic).</description>
+    </key>
+    <key name="ai-filter-strategy" type="s">
+      <default>'auto'</default>
+      <summary>AI Filtering Strategy</summary>
+      <description>Sets the preferred execution path for complex queries (auto, ast-only, script-only, disabled).</description>
     </key>
   </schema>
 </schemalist>

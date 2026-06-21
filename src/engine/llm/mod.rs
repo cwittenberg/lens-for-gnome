@@ -4,6 +4,7 @@ pub mod strategy_temporal;
 pub mod strategy_filter;
 pub mod strategy_ast;
 pub mod strategy_synthesis;
+pub mod strategy_script;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +25,7 @@ pub use strategy_temporal::TemporalStrategy;
 pub use strategy_filter::FastFilterStrategy;
 pub use strategy_ast::AstCompilerStrategy;
 pub use strategy_synthesis::SynthesisStrategy;
+pub use strategy_script::ScriptCompilerStrategy;
 
 // =====================================================================
 // 1. STRATEGY INTERFACE
@@ -329,11 +331,11 @@ impl LlmService {
         Ok(())
     }
 
-    pub fn determine_intent(&self, query: &str, explicit_synthesis: bool, is_cancelled: Arc<AtomicBool>) -> LlmIntent {
+    pub fn determine_intent(&self, query: &str, explicit_synthesis: bool, filter_strategy: Option<String>, is_cancelled: Arc<AtomicBool>) -> LlmIntent {
         if explicit_synthesis { return LlmIntent::SynthesizeAnswer; }
         let strategy = IntentStrategy;
         let core = self.engine.lock().unwrap();
-        strategy.execute(&core, query.to_string(), is_cancelled)
+        strategy.execute(&core, (query.to_string(), filter_strategy), is_cancelled)
     }
 
     pub fn filter_with_llm(&self, condition: &str, candidates: Vec<SearchResult>, is_cancelled: Arc<AtomicBool>) -> Vec<SearchResult> {
@@ -350,6 +352,12 @@ impl LlmService {
 
     pub fn compile_query_to_ast(&self, query: &str, schema_keys: Vec<String>, is_cancelled: Arc<AtomicBool>) -> serde_json::Value {
         let strategy = AstCompilerStrategy;
+        let core = self.engine.lock().unwrap();
+        strategy.execute(&core, (query.to_string(), schema_keys), is_cancelled)
+    }
+    
+    pub fn compile_query_to_script(&self, query: &str, schema_keys: Vec<String>, is_cancelled: Arc<AtomicBool>) -> String {
+        let strategy = ScriptCompilerStrategy;
         let core = self.engine.lock().unwrap();
         strategy.execute(&core, (query.to_string(), schema_keys), is_cancelled)
     }

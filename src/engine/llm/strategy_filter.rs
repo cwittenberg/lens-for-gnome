@@ -59,60 +59,59 @@ impl LlmStrategy for FastFilterStrategy {
                 }
             }
 
-            // Bulletproof JSON Array Prompt: Forces SLMs into strict numeric output
+            // Compact Tabular CoT Prompt: 
+            // Retains the mathematical extraction benefits of CoT but compresses it to ~8 tokens per doc to drastically increase speed.
             let prompt = format!(
-                "<|im_start|>system\nYou are a strict JSON API. Output ONLY a valid JSON object. No explanations.<|im_end|>\n\
+                "<|im_start|>system\nYou are a fast logic evaluator. You must strictly output ONLY a compact pipe-separated table.<|im_end|>\n\
                 <|im_start|>user\n\
-                Evaluate which documents satisfy this condition: \"{}\".\n\
+                Evaluate if EACH of the following documents satisfies this condition: \"{}\"\n\
                 \n\
                 CRITICAL INSTRUCTIONS:\n\
-                Output a JSON object with a single key \"passed\" containing an array of INTEGER Document IDs that satisfy the condition.\n\
-                If no documents pass, output an empty array.\n\
-                Example output:\n\
-                {{\"passed\": [1, 3]}}\n\
+                For EVERY document provided, you MUST output exactly ONE line using this strict format:\n\
+                ID | Extracted Value | Math/Logic Comparison | TRUE or FALSE\n\
+                \n\
+                Example Evaluations:\n\
+                98 | $120.00 | 120 > 80 | TRUE\n\
+                99 | $45.00 | 45 > 80 | FALSE\n\
                 \n\
                 DOCUMENTS:\n{}<|im_end|>\n\
                 <|im_start|>assistant\n\
-                {{\"passed\": [",
+                1 | ",
                 condition, docs_block
             );
 
-            // Dropped token limit from 150 -> 50 because array generation is hyper-efficient
-            let response = core.generate_text("FAST_FILTER_STRATEGY", &prompt, 50, Arc::clone(&is_cancelled));
-            let clean_resp = response.trim();
+            // Lower token limit back down to prevent runaway generation, 200 is plenty for compressed tabular output
+            let response = core.generate_text("FAST_FILTER_STRATEGY", &prompt, 200, Arc::clone(&is_cancelled));
             
-            let full_response = if clean_resp.starts_with("{\"passed\":") || clean_resp.starts_with('[') {
-                clean_resp.to_string()
-            } else {
-                format!("{{\"passed\": [{}", clean_resp)
-            };
-
-            let mut json_str = full_response.clone();
-            let mut parsed_val = serde_json::from_str::<serde_json::Value>(&json_str);
+            // We prime the LLM with "1 | " to ensure it immediately starts formatting correctly, so we must prepend it back.
+            let full_response = format!("1 | {}", response.trim());
             
-            // Iteratively salvage prematurely cut-off JSON arrays
-            while parsed_val.is_err() && json_str.len() > 5 {
-                json_str.pop();
-                let test_str = format!("{}]}}", json_str.trim_end_matches(',').trim_end_matches(']'));
-                parsed_val = serde_json::from_str::<serde_json::Value>(&test_str);
-            }
-
             let mut matched_indices = Vec::new();
-            if let Ok(json_obj) = parsed_val {
-                if let Some(arr) = json_obj.get("passed").and_then(|v| v.as_array()) {
-                    for val in arr {
-                        // Handle cases where the LLM might output integers or strings
-                        if let Some(id_u64) = val.as_u64() {
-                            let id = id_u64 as usize;
-                            if id > 0 {
-                                matched_indices.push(id - 1);
+            let mut reasoning_map = std::collections::HashMap::new();
+
+            for line in full_response.lines() {
+                let clean_line = line.replace("**", "");
+                let parts: Vec<&str> = clean_line.split('|').map(|s| s.trim()).collect();
+                
+                if parts.len() >= 4 {
+                    let id_str = parts[0].replace("DOC_ID:", "").replace("ID:", "").replace(":", "").trim().to_string();
+                    
+                    if let Ok(id) = id_str.parse::<usize>() {
+                        if id > 0 {
+                            let doc_idx = id - 1;
+                            
+                            // Reconstruct a UI-friendly reasoning string from the compact table
+                            let extracted_val = parts[1];
+                            let comparison = parts[2];
+                            let match_str = parts[3].to_uppercase();
+                            
+                            let thought = format!("Found '{}' -> {}", extracted_val, comparison);
+                            let is_match = match_str.contains("TRUE") && !match_str.contains("FALSE");
+                            
+                            if is_match {
+                                matched_indices.push(doc_idx);
                             }
-                        } else if let Some(id_str) = val.as_str() {
-                            if let Ok(id) = id_str.parse::<usize>() {
-                                if id > 0 {
-                                    matched_indices.push(id - 1);
-                                }
-                            }
+                            reasoning_map.insert(doc_idx, thought);
                         }
                     }
                 }
@@ -121,7 +120,12 @@ impl LlmStrategy for FastFilterStrategy {
             for (i, doc) in chunk.iter_mut().enumerate() {
                 let is_match = matched_indices.contains(&i);
                 doc.ai_matched = Some(is_match);
-                doc.ai_reasoning = Some(if is_match { format!("Condition '{}' = True", condition) } else { format!("Condition '{}' = False", condition) });
+                
+                if let Some(thought) = reasoning_map.get(&i) {
+                    doc.ai_reasoning = Some(thought.clone());
+                } else {
+                    doc.ai_reasoning = Some(if is_match { format!("Condition '{}' = True", condition) } else { format!("Condition '{}' = False", condition) });
+                }
             }
             
             all_processed.extend(chunk.iter().cloned());

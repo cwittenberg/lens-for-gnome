@@ -10,8 +10,8 @@
   "artifacts": {
     "root": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip",
     "metadata_path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:metadata.json",
-    "js_file_count": 12,
-    "file_count": 15,
+    "js_file_count": 13,
+    "file_count": 16,
     "limits": {
       "max_files": 5000,
       "max_file_size_bytes": 10485760,

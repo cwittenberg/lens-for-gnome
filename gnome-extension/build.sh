@@ -19,7 +19,7 @@ mkdir -p "$BUILD_DIR/locale"
 mkdir -p "po"
 
 echo "Validating extension files..."
-for file in metadata.json extension.js ui.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_about.js schemas/org.gnome.shell.extensions.gnome-lens.gschema.xml; do
+for file in metadata.json extension.js ui.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_about.js prefs_look_and_feel.js schemas/org.gnome.shell.extensions.gnome-lens.gschema.xml; do
     if [ ! -f "$file" ]; then
         echo "Error: $file not found in the current directory. Please make sure all files exist."
         exit 1
@@ -31,7 +31,7 @@ glib-compile-schemas --strict schemas/
 
 echo "Extracting strings and generating translation template..."
 if command -v xgettext &> /dev/null; then
-    xgettext --from-code=UTF-8 --language=JavaScript --keyword=_ --add-comments -o po/gnome-lens.pot extension.js ui.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_about.js
+    xgettext --from-code=UTF-8 --language=JavaScript --keyword=_ --add-comments -o po/gnome-lens.pot extension.js ui.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_about.js prefs_look_and_feel.js
     echo "Translation template generated at po/gnome-lens.pot"
 else
     echo "Warning: xgettext not found, skipping string extraction."
@@ -57,7 +57,7 @@ for po_file in po/*.po; do
 done
 
 echo "Copying files to build directory..."
-cp metadata.json extension.js ui.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_about.js "$BUILD_DIR/"
+cp metadata.json extension.js ui.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_about.js prefs_look_and_feel.js "$BUILD_DIR/"
 cp -r schemas "$BUILD_DIR/"
 
 rm -f "$BUILD_DIR/schemas/gschemas.compiled"
@@ -93,6 +93,7 @@ if command -v gnome-extensions &> /dev/null; then
         "--extra-source=prefs_ai.js"
         "--extra-source=prefs_index.js"
         "--extra-source=prefs_about.js"
+        "--extra-source=prefs_look_and_feel.js"
         "--extra-source=schemas"
     )
 
@@ -175,6 +176,7 @@ cp "$BUILD_DIR/prefs_main.js" "$EXTENSION_DIR/"
 cp "$BUILD_DIR/prefs_ai.js" "$EXTENSION_DIR/"
 cp "$BUILD_DIR/prefs_index.js" "$EXTENSION_DIR/"
 cp "$BUILD_DIR/prefs_about.js" "$EXTENSION_DIR/"
+cp "$BUILD_DIR/prefs_look_and_feel.js" "$EXTENSION_DIR/"
 cp -r "$BUILD_DIR/schemas" "$EXTENSION_DIR/"
 
 if [ -f "$BUILD_DIR/stylesheet.css" ]; then

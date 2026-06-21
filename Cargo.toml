@@ -26,3 +26,6 @@ rqrr = "0.6" # Pure Rust QR code scanning
 ocrs = "0.3" # (Future) Pure Rust OCR engine
 fancy-regex = "0.13" # Used for complex lookarounds in smart extraction
 #regex = "1.12.4"
+
+#script
+rhai = "1.19.0"
