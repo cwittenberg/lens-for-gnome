@@ -1,4 +1,5 @@
 // src/triggers/inotify_watcher.rs
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -17,39 +18,48 @@ pub struct INotifyTrigger;
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(500);
 const RX_IDLE_TICK: Duration = Duration::from_millis(100);
 
-/// Checks if any part of the path is hidden.
+/// Checks if the immediate file or folder is hidden.
 /// Explicitly ignores GTK's temporary save files to prevent massive parent directory re-walks.
 fn is_hidden(path: &Path) -> bool {
     let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+    
     if file_name.starts_with(".goutputstream") || file_name.ends_with(".tmp") {
         return true;
     }
-    path.components().any(|c| {
-        let s = c.as_os_str().to_string_lossy();
-        s.starts_with('.') && s != "." && s != ".."
-    })
+    
+    // FIX: We must only check the explicit filename for a leading dot. 
+    // Iterating over path.components() causes the kernel to falsely ignore 
+    // EVERYTHING inside the `~/.local/...` or `~/.config/...` directories!
+    file_name.starts_with('.') && file_name != "." && file_name != ".."
 }
 
 /// Calculates depth relative to the configured base watch directories.
 /// Highly robust fallback mechanism to handle symlinks and un-canonicalizable transient paths.
 fn get_depth(path: &Path, bases: &[PathBuf], raw_bases: &[PathBuf]) -> Option<usize> {
     let clean = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    
+    let mut min_depth = None;
+
     for (i, b) in bases.iter().enumerate() {
         // 1. Try canonicalized path against canonicalized base
         if let Ok(stripped) = clean.strip_prefix(b) {
-            return Some(stripped.components().count());
+            let d = stripped.components().count();
+            min_depth = Some(min_depth.map_or(d, |min| std::cmp::min(min, d)));
         }
+        
         // 2. Fallback: Try raw path against canonicalized base
         if let Ok(stripped) = path.strip_prefix(b) {
-            return Some(stripped.components().count());
+            let d = stripped.components().count();
+            min_depth = Some(min_depth.map_or(d, |min| std::cmp::min(min, d)));
         }
+        
         // 3. Fallback: Try raw path against raw base (preserves exact string matches)
         if let Ok(stripped) = path.strip_prefix(&raw_bases[i]) {
-            return Some(stripped.components().count());
+            let d = stripped.components().count();
+            min_depth = Some(min_depth.map_or(d, |min| std::cmp::min(min, d)));
         }
     }
-    None
+    
+    min_depth
 }
 
 /// Recursively scans, watches, and indexes a path while respecting depth limits.
@@ -93,8 +103,10 @@ fn process_path(
         // If it's a NEW directory (or initial boot), traverse it to place inotify watches
         // on all its subdirectories up to max_depth.
         let remaining_depth = max_depth - root_depth;
+        
         for entry in WalkDir::new(path).max_depth(remaining_depth).follow_links(true).into_iter().flatten() {
             let sub_path = entry.path();
+            
             if is_hidden(sub_path) { continue; }
 
             if sub_path.is_dir() {
@@ -117,6 +129,7 @@ impl IndexTrigger for INotifyTrigger {
     fn start(&self, target_dirs: Vec<String>, max_depth: usize, pipeline: Arc<IngestionPipeline>) {
         thread::spawn(move || {
             let (tx, rx) = mpsc::channel();
+            
             let mut watcher = RecommendedWatcher::new(
                 move |res| { if let Ok(e) = res { let _ = tx.send(e); } },
                 Config::default(),
@@ -129,7 +142,7 @@ impl IndexTrigger for INotifyTrigger {
             let raw_base_paths: Vec<PathBuf> = target_dirs.iter()
                 .map(|d| PathBuf::from(d))
                 .collect();
-
+                
             let base_paths: Vec<PathBuf> = target_dirs.iter()
                 .map(|d| Path::new(d).canonicalize().unwrap_or_else(|_| PathBuf::from(d)))
                 .collect();
@@ -166,6 +179,7 @@ impl IndexTrigger for INotifyTrigger {
                                     println!("[INotify] Kernel loopback test successful.");
                                     continue;
                                 }
+                                
                                 if !is_hidden(&p) {
                                     pending.insert(p.clone(), Instant::now() + EVENT_DEBOUNCE);
                                 }
@@ -185,6 +199,7 @@ impl IndexTrigger for INotifyTrigger {
 
                 for path in due {
                     pending.remove(&path);
+                    
                     if path.exists() {
                         // Real-time events MUST be indexed
                         process_path(&mut watcher, &mut watched, &path, max_depth, &pipeline, &base_paths, &raw_base_paths, false);

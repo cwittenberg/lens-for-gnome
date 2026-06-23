@@ -182,8 +182,9 @@ class GnomeLensResultsList extends St.ScrollView {
         let getGroup = (r) => {
             if (isFolderResult(r)) return 0;
             if (r.plugin_id === 'plugin:app_launcher' || r.plugin_id === 'plugin:math') return 1;
-            if (r.metadata && r.metadata.shallow_index === 'true') return 3;
-            return 2;
+            if (r.plugin_id === 'plugin:email' || getExt(r) === 'eml') return 2;
+            if (r.metadata && r.metadata.shallow_index === 'true') return 4;
+            return 3;
         };
         
         // Advanced Grouping and Sorting Pipeline
@@ -195,7 +196,6 @@ class GnomeLensResultsList extends St.ScrollView {
             let groupA = getGroup(a);
             let groupB = getGroup(b);
             
-            // 0 (Folders) will always sort before 1, 2, and 3
             if (groupA !== groupB) return groupA - groupB;
             
             return b.score - a.score;
@@ -203,7 +203,7 @@ class GnomeLensResultsList extends St.ScrollView {
 
         let maxRender = Math.min(this._results.length, 30);
         let currentGroup = -1;
-        let groupNames = ["Folders", "Applications & Tools", "Indexed Documents", "Other Files"];
+        let groupNames = ["Folders", "Applications & Tools", "Emails", "Indexed Documents", "Other Files"];
 
         for (let i = 0; i < maxRender; i++) {
             let res = this._results[i];
@@ -211,6 +211,7 @@ class GnomeLensResultsList extends St.ScrollView {
             let ext = getExt(res);
             let isFolder = isFolderResult(res);
             let group = getGroup(res);
+            let isEmail = res.plugin_id === 'plugin:email' || ext === 'eml';
             
             if (group !== currentGroup) {
                 let header = new St.Label({
@@ -221,6 +222,7 @@ class GnomeLensResultsList extends St.ScrollView {
                 currentGroup = group;
             }
 
+            // Using pure St.BoxLayout with button-press-event ignores ScrollView capture delays and fires instantly
             let itemBox = new St.BoxLayout({
                 style_class: 'lens-result-item',
                 vertical: false,
@@ -281,7 +283,7 @@ class GnomeLensResultsList extends St.ScrollView {
                 }
             }
 
-            if (res.plugin_id === 'plugin:email') iconName = 'mail-unread-symbolic';
+            if (isEmail) iconName = 'mail-unread-symbolic';
             if (res.plugin_id === 'plugin:math') iconName = 'accessories-calculator-symbolic';
             
             if (res.plugin_id === 'plugin:app_launcher') {
@@ -324,14 +326,21 @@ class GnomeLensResultsList extends St.ScrollView {
                 x_expand: true,
             });
 
+            let displayTitle = res.title || 'Unknown Document';
+            if (isEmail && res.metadata && res.metadata.subject) {
+                displayTitle = res.metadata.subject;
+            } else if (isEmail) {
+                displayTitle = displayTitle.replace('.eml', '');
+            }
+
             let title = new St.Label({
-                text: res.title || 'Unknown Document',
+                text: displayTitle,
                 style_class: 'lens-result-title',
                 y_align: Clutter.ActorAlign.CENTER,
             });
             titleBox.add_child(title);
 
-            if (res.filepath && res.plugin_id !== 'plugin:math') {
+            if (res.filepath && res.plugin_id !== 'plugin:math' && !isEmail) {
                 let parentPathStr = res.filepath;
                 let lastSlash = parentPathStr.lastIndexOf('/');
                 if (lastSlash > 0) {
@@ -389,7 +398,51 @@ class GnomeLensResultsList extends St.ScrollView {
                 y_align: Clutter.ActorAlign.CENTER,
             });
 
-            if (res.filepath && res.plugin_id !== 'plugin:app_launcher' && res.plugin_id !== 'plugin:math') {
+            if (isEmail) {
+                if (res.metadata && res.metadata.from) {
+                    let senderPill = new St.BoxLayout({
+                        vertical: false,
+                        style_class: 'lens-result-folder-pill',
+                        y_align: Clutter.ActorAlign.CENTER,
+                    });
+                    let senderLabel = new St.Label({
+                        text: res.metadata.from,
+                        style_class: 'lens-result-folder-pill-text',
+                        y_align: Clutter.ActorAlign.CENTER,
+                    });
+                    senderPill.add_child(senderLabel);
+                    actionBox.add_child(senderPill);
+                }
+                
+                if (res.metadata && res.metadata.date) {
+                    let d = new Date(res.metadata.date);
+                    let dateStr = res.metadata.date;
+                    if (!isNaN(d.getTime())) {
+                        let now = new Date();
+                        let isToday = d.getDate() === now.getDate() && 
+                                      d.getMonth() === now.getMonth() && 
+                                      d.getFullYear() === now.getFullYear();
+                        if (isToday) {
+                            dateStr = d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                        } else {
+                            dateStr = d.toLocaleDateString([], {month: 'short', day: 'numeric', year: 'numeric'});
+                        }
+                    }
+
+                    let datePill = new St.BoxLayout({
+                        vertical: false,
+                        style_class: 'lens-result-folder-pill',
+                        y_align: Clutter.ActorAlign.CENTER,
+                    });
+                    let dateLabel = new St.Label({
+                        text: dateStr,
+                        style_class: 'lens-result-folder-pill-text',
+                        y_align: Clutter.ActorAlign.CENTER,
+                    });
+                    datePill.add_child(dateLabel);
+                    actionBox.add_child(datePill);
+                }
+            } else if (res.filepath && res.plugin_id !== 'plugin:app_launcher' && res.plugin_id !== 'plugin:math') {
                 let pillBox = new St.BoxLayout({
                     vertical: false,
                     style_class: 'lens-result-folder-pill',
@@ -492,7 +545,6 @@ class GnomeLensResultsList extends St.ScrollView {
                 };
 
                 openFolderBtn.connectObject('button-press-event', handleFolderClick, this);
-                openFolderBtn.connectObject('clicked', handleFolderClick, this);
                 
                 actionBox.add_child(openFolderBtn);
             }

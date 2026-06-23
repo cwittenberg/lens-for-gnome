@@ -83,12 +83,12 @@ impl LlmStrategy for IntentStrategy {
             1: SKIP (Standard keyword search)\n\
             2: REFINE_TIME (Time/Date filters, e.g., 'last year', 'yesterday')\n\
             3: FILTER_AST (Basic math/logic/exact filters, e.g., 'under 100', 'without', '\"exact\"')\n\
-            4: SYNTHESIZE (Questions needing a written answer, e.g., 'explain how')\n\
+            4: SYNTHESIZE (Questions needing a written descriptive answer, e.g., 'explain how', 'how much', 'what is', 'why')\n\
             5: FILTER_SCRIPT (Complex programmatic logic, Regex, 'starts with', 'ends with', complex substrings)\n\n\
             CRITICAL HIERARCHY OF RULES:\n\
-            - PRIORITY A: If the query requests regex, patterns, or complex string manipulation (starts/ends with, format), answer 5.\n\
-            - PRIORITY B: If the query contains quantitative words ('less', 'greater', 'under', 'over') OR literal quotes (\") OR exclusionary words ('not', 'excluding', 'without'), answer 3.\n\
-            - PRIORITY C: If it contains question words ('explain', 'what', 'how'), answer 4.\n\
+            - PRIORITY A: If the query is a question asking for an explanation, summary, or descriptive answer (e.g., 'how much', 'what', 'how', 'why', 'who', 'when', 'where', 'explain', 'summarize'), answer 4.\n\
+            - PRIORITY B: If the query requests regex, patterns, or complex string manipulation (starts/ends with, format), answer 5.\n\
+            - PRIORITY C: If the query contains quantitative filters ('less', 'greater', 'under', 'over') OR literal quotes (\") OR exclusionary words ('not', 'excluding', 'without'), answer 5.\n\
             - PRIORITY D: Only if NO filters or questions exist, answer 1.\n\n\
             Query:\n\
             [{}]\n\
@@ -102,13 +102,20 @@ impl LlmStrategy for IntentStrategy {
         let clean_response = response.replace("INTENT_DIGIT:", "");
         
         let mut intent = LlmIntent::Skip;
-        if clean_response.contains('5') { intent = LlmIntent::FilterScript; }
-        else if clean_response.contains('3') { intent = LlmIntent::FilterAst; }
+        // Prioritize evaluating '4' first so that parsing issues don't drop synthesis to script or AST
+        if clean_response.contains('4') { intent = LlmIntent::SynthesizeAnswer; }
+        else if clean_response.contains('5') { intent = LlmIntent::FilterScript; }
+        else if clean_response.contains('3') { intent = LlmIntent::FilterScript; } // Preference override: Map AST classifications to FilterScript natively
         else if clean_response.contains('2') { intent = LlmIntent::RefineSearch; }
-        else if clean_response.contains('4') { intent = LlmIntent::SynthesizeAnswer; }
 
         // Override intents securely based on user strategy preference
         match strat.as_str() {
+            "auto" => {
+                // Guarantee script generation is preferred over AST when auto is active
+                if intent == LlmIntent::FilterAst { 
+                    intent = LlmIntent::FilterScript; 
+                }
+            },
             "ast-only" => {
                 if intent == LlmIntent::FilterScript { intent = LlmIntent::FilterAst; }
             },

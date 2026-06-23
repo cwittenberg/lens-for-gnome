@@ -29,3 +29,9 @@ fancy-regex = "0.13" # Used for complex lookarounds in smart extraction
 
 #script
 rhai = "1.19.0"
+
+
+#mail
+mailparse = "0.14"
+imap = "2.4"
+native-tls = "0.2"

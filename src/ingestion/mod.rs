@@ -7,14 +7,17 @@ pub mod spreadsheet;
 pub mod legacy;
 pub mod image;
 pub mod video; 
+pub mod eml;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
+
 use walkdir::WalkDir;
 use rayon::prelude::*;
 use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
+
 use crate::vector::VectorStore;
 
 // Configurable global limit for text extraction per document
@@ -57,6 +60,7 @@ impl IngestionPipeline {
                 Box::new(legacy::LegacyDocExtractor),
                 Box::new(image::ImageExtractor::new()),
                 Box::new(video::VideoExtractor::new()),
+                Box::new(eml::EmlExtractor),
             ],
             domain_keywords,
             blacklist,
@@ -206,7 +210,9 @@ impl IngestionPipeline {
     }
 
     pub fn remove_file(&self, path: &Path) {
-        let path_str = path.to_string_lossy().to_string();
+        // SECURE: Use canonical path for database lookup to ensure exact match
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let path_str = canonical_path.to_string_lossy().to_string();
         self.store.delete_document(&path_str);
         if let Some(name) = path.file_name() {
             println!("[Indexer] Removed from index: {:?}", name);
@@ -215,13 +221,14 @@ impl IngestionPipeline {
 
     pub fn index_file(&self, path: &Path) {
         if !path.exists() { return; }
+
         let is_dir = path.is_dir();
         if !is_dir && !path.is_file() { return; }
         
-        let path_str = path.to_string_lossy().to_string();
+        // SECURE: Force canonicalization so DB IDs always match WalkDir and INotify paths
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let path_str = canonical_path.to_string_lossy().to_string();
 
-        // Enforce nanosecond precision. SQLite uses i64 which safely holds nanosecond timestamps until the year 2262.
-        // This permanently fixes the collision bug where files saved by GTK/GNOME within the same millisecond were dropped.
         let modified_at = path.metadata()
             .ok()
             .and_then(|m| m.modified().ok().or_else(|| m.created().ok()))
@@ -229,20 +236,22 @@ impl IngestionPipeline {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64);
 
+        // FAST BYPASS: Skip instantly if DB timestamp equals current disk timestamp
         if let Some(db_modified) = self.store.get_document_modified_at(&path_str) {
-            if modified_at <= db_modified {
-                return; // Skip reindexing, file/folder is unchanged
+            // Protect against schema resets where db_modified was forced to 0
+            if modified_at <= db_modified && db_modified != 0 {
+                return; 
             }
         }
 
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+
         let ext = if is_dir {
             "directory".to_string()
         } else {
             path.extension().and_then(|e| e.to_str()).unwrap_or("unknown").to_lowercase()
         };
 
-        // Inject the target keywords directly into the FTS engine so it naturally matches lexical "folder" queries
         let (mut content, mut is_shallow) = if is_dir {
             ("Folder Directory".to_string(), true)
         } else if let Some(extractor) = self.extractors.iter().find(|e| e.can_handle(&ext)) {
@@ -254,14 +263,37 @@ impl IngestionPipeline {
             (String::new(), true)
         };
 
-        // CRITICAL FIX: The embedding model fails silently and aborts the function returning `None` if fed an empty string. 
-        // This forces empty screenshots to embed gracefully as their title.
         if content.trim().is_empty() {
             content = format!("Filename: {}", path.file_name().unwrap_or_default().to_string_lossy());
             is_shallow = true;
         }
 
         let mut metadata = self.extract_entities(&content, &ext);
+        
+        // --- Store EML Metadata Permanently ---
+        if ext == "eml" {
+            for line in content.lines().take(50) {
+                let lower = line.to_lowercase();
+                if lower.starts_with("subject: ") && !metadata.contains_key("subject") {
+                    metadata.insert("subject".to_string(), line[9..].trim().to_string());
+                } else if lower.starts_with("from: ") && !metadata.contains_key("from") {
+                    let mut from_val = line[6..].trim().to_string();
+                    if let Some(idx) = from_val.find('<') {
+                        let name = from_val[..idx].trim();
+                        if !name.is_empty() {
+                            from_val = name.replace("\"", "");
+                        }
+                    }
+                    metadata.insert("from".to_string(), from_val);
+                } else if lower.starts_with("date: ") && !metadata.contains_key("date") {
+                    metadata.insert("date".to_string(), line[6..].trim().to_string());
+                } else if lower.starts_with("message-id: ") && !metadata.contains_key("message_id") {
+                    metadata.insert("message_id".to_string(), line[12..].trim().to_string());
+                }
+            }
+        }
+        // --------------------------------------
+
         metadata.insert("created_at".to_string(), modified_at.to_string());
         metadata.insert("indexed_at".to_string(), now.to_string());
         metadata.insert("shallow_index".to_string(), is_shallow.to_string());
@@ -285,6 +317,7 @@ impl IngestionPipeline {
                 modified_at,
                 metadata
             );
+
             if is_shallow {
                 println!("[Indexer] Shallow Tracked: {:?}", path.file_name().unwrap_or_default());
             } else {
@@ -307,7 +340,7 @@ impl IngestionPipeline {
             
             for entry in WalkDir::new(&target_dir)
                 .max_depth(max_depth)
-                .follow_links(true) // Required for explicit mount points or custom user symlinks
+                .follow_links(true) 
                 .into_iter()
                 .filter_entry(|e| {
                     let fname = e.file_name().to_string_lossy();
@@ -317,7 +350,9 @@ impl IngestionPipeline {
                 match entry {
                     Ok(e) => {
                         if e.file_type().is_file() || e.file_type().is_dir() {
-                            let path_str = e.path().to_string_lossy().to_string();
+                            // SECURE: Force canonicalization during sweep to match DB and INotify precisely
+                            let canonical_path = e.path().canonicalize().unwrap_or_else(|_| e.path().to_path_buf());
+                            let path_str = canonical_path.to_string_lossy().to_string();
                             
                             let disk_mod = e.metadata()
                                 .ok()
@@ -328,7 +363,7 @@ impl IngestionPipeline {
 
                             let needs_index = match db_state.get(&path_str) {
                                 Some(&db_mod) => disk_mod > db_mod || db_mod == 0,
-                                None => true, // Missing from index!
+                                None => true,
                             };
 
                             if needs_index {

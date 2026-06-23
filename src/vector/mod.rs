@@ -78,9 +78,11 @@ impl VectorStore {
             [],
         ).expect("Failed to create base tables");
 
+
         // --- FTS TOKENIZER MIGRATION ---
         let mut needs_fts_migration = false;
         let mut fts_exists = false;
+
         if let Ok(mut stmt) = conn.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_fts'") {
             if let Ok(mut rows) = stmt.query([]) {
                 if let Ok(Some(row)) = rows.next() {
@@ -163,6 +165,7 @@ impl VectorStore {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
+
         conn.execute("UPDATE documents SET modified_at = 0", []).ok();
         println!("[Database] All modification timestamps reset to 0 to force full re-index.");
     }
@@ -260,10 +263,8 @@ impl VectorStore {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-
         let mut stmt = conn.prepare("SELECT modified_at FROM documents WHERE id = ?1").ok()?;
         let mut rows = stmt.query(params![path]).ok()?;
-
         if let Ok(Some(row)) = rows.next() {
             row.get(0).ok()
         } else {
@@ -296,7 +297,6 @@ impl VectorStore {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-
         conn.execute("BEGIN TRANSACTION", []).ok();
         conn.execute("DELETE FROM documents WHERE id = ?1", params![path]).ok();
         conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![path]).ok();
@@ -392,6 +392,7 @@ impl VectorStore {
         let mut exact_phrases = Vec::new();
         let mut in_quotes = false;
         let mut current_phrase = String::new();
+
         for c in raw_query_text.chars() {
             if c == '"' {
                 if in_quotes && !current_phrase.trim().is_empty() {
@@ -416,6 +417,7 @@ impl VectorStore {
             .join(" OR ");
 
         let mut safe_query = semantic_query;
+
         if !exact_phrases.is_empty() {
             let exact_fts: String = exact_phrases.iter()
                 .map(|p| format!("\"{}\"", p.replace("\"", ""))) 
@@ -431,9 +433,9 @@ impl VectorStore {
             
         if !safe_query.is_empty() {
             if let Ok(mut fts_stmt) = conn.prepare(
-                "SELECT id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip
-                 FROM documents_fts
-                 WHERE documents_fts MATCH ?1
+                "SELECT id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip 
+                 FROM documents_fts 
+                 WHERE documents_fts MATCH ?1 
                  ORDER BY rank LIMIT 100"
             ) {
                 if let Ok(mut rows) = fts_stmt.query(params![safe_query]) {
@@ -500,6 +502,7 @@ impl VectorStore {
             let f_score = if f_rank < 1000.0 { 1.0 / (rrf_k + f_rank) } else { 0.0 };
             
             let mut rrf_score = v_score + f_score;
+
             let is_fts_match = f_rank < 1000.0;
 
             if contains_specifics {
@@ -589,11 +592,44 @@ impl VectorStore {
             let parsed_filename = Path::new(&id).file_name().unwrap_or_default().to_string_lossy().to_string();
             let mut metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
             
-            let created_at = metadata.remove("created_at").and_then(|v| v.parse::<u64>().ok());
-            let indexed_at = metadata.remove("indexed_at").and_then(|v| v.parse::<u64>().ok());
-
             let mut text_stmt = conn.prepare("SELECT content_text FROM documents_fts WHERE id = ?1").unwrap();
             let full_text: String = text_stmt.query_row(params![&id], |row| row.get(0)).unwrap_or_default();
+
+            // --- Retroactive EML Metadata Extraction ---
+            let is_eml = metadata.get("filetype").map(|s| s.as_str()) == Some("eml") || parsed_filename.ends_with(".eml");
+            if is_eml {
+                for line in full_text.lines().take(50) {
+                    let lower = line.to_lowercase();
+                    if lower.starts_with("subject: ") && !metadata.contains_key("subject") {
+                        metadata.insert("subject".to_string(), line[9..].trim().to_string());
+                    } else if lower.starts_with("from: ") && !metadata.contains_key("from") {
+                        let mut from_val = line[6..].trim().to_string();
+                        if let Some(idx) = from_val.find('<') {
+                            let name = from_val[..idx].trim();
+                            if !name.is_empty() {
+                                from_val = name.replace("\"", "");
+                            }
+                        }
+                        metadata.insert("from".to_string(), from_val);
+                    } else if lower.starts_with("date: ") && !metadata.contains_key("date") {
+                        metadata.insert("date".to_string(), line[6..].trim().to_string());
+                    } else if lower.starts_with("message-id: ") && !metadata.contains_key("message_id") {
+                        metadata.insert("message_id".to_string(), line[12..].trim().to_string());
+                    }
+                }
+                
+                // Dynamically build the exact browser launch URL utilizing the extracted internet message-id
+                if let Some(msg_id) = metadata.get("message_id").cloned() {
+                    let clean_id = msg_id.trim_matches(|c| c == '<' || c == '>');
+                    // Simple URL encoding for the most common characters found in Message-IDs
+                    let encoded_id = clean_id.replace("@", "%40").replace("+", "%2B");
+                    metadata.insert("gmail_url".to_string(), format!("https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{}", encoded_id));
+                }
+            }
+            // -------------------------------------------
+
+            let created_at = metadata.remove("created_at").and_then(|v| v.parse::<u64>().ok());
+            let indexed_at = metadata.remove("indexed_at").and_then(|v| v.parse::<u64>().ok());
 
             let final_snippet = if is_fts_match {
                 fts_snippet

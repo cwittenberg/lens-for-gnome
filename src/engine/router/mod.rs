@@ -302,19 +302,47 @@ impl SystemRouter {
             },
             
             LlmIntent::SynthesizeAnswer => {
-                send_chunk(serde_json::json!({"status": "synthesizing", "message": "Reading documents..."}).to_string());
+                send_chunk(serde_json::json!({"status": "synthesizing", "message": "Extracting search concepts..."}).to_string());
                 
-                let answer_json = self.llm.generate_synthesis(&search_query.raw_text, fast_results.clone(), Arc::clone(&is_cancelled));
+                let core_concept = self.llm.extract_core_concept(&search_query.raw_text, Arc::clone(&is_cancelled));
                 
-                let final_payload: Vec<_> = fast_results.into_iter().map(|mut r| {
-                    r.full_context = None;
-                    r
-                }).collect();
+                send_chunk(serde_json::json!({"status": "synthesizing", "message": "Reading local documents..."}).to_string());
+                
+                let mut refined_query = search_query.clone();
+                // Overwrite the raw text with the clean semantic keywords so vector search isolates the topic
+                refined_query.raw_text = core_concept.clone();
+                
+                let mut rag_docs = Vec::new();
+                if let Some(vector_plugin) = self.plugins.iter().find(|p| p.id() == "plugin:vector_db") {
+                    rag_docs = vector_plugin.execute(&refined_query);
+                }
+                
+                // Pass the original question to the LLM so it can answer it properly using the clean RAG docs
+                let answer_json = self.llm.generate_synthesis(&search_query.raw_text, rag_docs.clone(), Arc::clone(&is_cancelled));
+                
+                let cited_indices: Vec<usize> = answer_json["cited_indices"]
+                    .as_array()
+                    .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
+                    .unwrap_or_default();
+                    
+                let mut final_payload = Vec::new();
+                
+                for idx in cited_indices {
+                    // LLM citations are 1-based (Source [1], Source [2])
+                    if idx > 0 && idx <= rag_docs.len() {
+                        let mut doc = rag_docs[idx - 1].clone();
+                        doc.full_context = None;
+                        doc.ai_matched = Some(true);
+                        doc.ai_reasoning = Some("Referenced by AI synthesis".to_string());
+                        final_payload.push(doc);
+                    }
+                }
 
                 send_chunk(serde_json::json!({
                     "status": "final",
                     "mode": "rag_synthesis",
                     "synthesis_result": answer_json,
+                    // Replaces the bogus fast_results with only the strictly cited files
                     "results": final_payload
                 }).to_string());
                 println!("[Router DEBUG] SynthesizeAnswer Intent finished in {:.2?}", phase_start.elapsed());

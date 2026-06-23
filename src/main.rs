@@ -1,4 +1,5 @@
 // src/main.rs
+
 mod domain;
 mod vector;
 mod ingestion;
@@ -22,7 +23,7 @@ use crate::vector::VectorStore;
 use crate::ingestion::IngestionPipeline;
 use crate::plugins::{MathPlugin, EmailPlugin, AppLauncherPlugin, VectorSearchPlugin, PluginTool};
 use crate::engine::{SystemRouter, ThreadPool};
-use crate::triggers::{INotifyTrigger, IndexTrigger};
+use crate::triggers::{INotifyTrigger, IndexTrigger, GmailSyncDaemon};
 
 /// Helper to configure the gsettings command securely, 
 /// injecting the local schema path if running in development mode.
@@ -90,7 +91,6 @@ fn get_gsettings_array(key: &str) -> Vec<String> {
             eprintln!("[GSettings Error] Failed to read {}: {}", key, String::from_utf8_lossy(&output.stderr).trim());
             return Vec::new();
         }
-
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         println!("[Boot DEBUG] Raw gsettings output for {}: {:?}", key, stdout);
         
@@ -176,12 +176,14 @@ fn main() -> std::io::Result<()> {
     if !Path::new(&data_dir).exists() {
         fs::create_dir_all(&data_dir).expect("Failed to create secure data directory");
     }
+
     let db_path = format!("{}/gnome-lens.db", data_dir);
 
     let state_dir = format!("{}/.local/state/gnome-lens", home_dir);
     if !Path::new(&state_dir).exists() {
         fs::create_dir_all(&state_dir).expect("Failed to create secure state directory");
     }
+    
     let socket_path = format!("{}/gnome_lens.sock", state_dir);
 
     let max_depth = get_gsettings_int("index-max-depth", 3);
@@ -241,6 +243,7 @@ fn main() -> std::io::Result<()> {
     
     let is_full_system = get_gsettings_bool("index-full-system");
     let blacklist = get_gsettings_array("index-blacklist");
+
     let mut target_directories = Vec::new();
 
     if is_full_system {
@@ -259,8 +262,22 @@ fn main() -> std::io::Result<()> {
             let expanded_path = p.replace("~", &home_dir);
             target_directories.push(expanded_path);
         }
+
         target_directories.push("/usr/share/applications".to_string());
         target_directories.push("/etc".to_string());
+    }
+
+    // Force injection of the new mail directory into the watched targets so INotify tracks incoming files
+    let mail_dir = format!("{}/mail", data_dir);
+    
+    // Proactively create the mail directory before validation so it doesn't get 
+    // dropped from the target list on fresh installations.
+    if !Path::new(&mail_dir).exists() {
+        fs::create_dir_all(&mail_dir).expect("Failed to create secure mail directory");
+    }
+
+    if !target_directories.contains(&mail_dir) {
+        target_directories.push(mail_dir.clone());
     }
 
     println!("[Boot DEBUG] Target directories before validation: {:?}", target_directories);
@@ -277,18 +294,25 @@ fn main() -> std::io::Result<()> {
 
     let pipeline = Arc::new(IngestionPipeline::new(Arc::clone(&vector_store), &config_dir, blacklist));
 
+    // Spin up the local Gmail Sync Replica daemon
+    let gmail_daemon = GmailSyncDaemon::new(&config_dir, &data_dir);
+    gmail_daemon.start();
+
     // STARTUP RECONCILIATION
     let initial_pipeline = Arc::clone(&pipeline);
-    let target_dirs_clone = target_directories.clone();
+    
+    // Re-included the mail directory in the startup sweep.
+    // This is crucial to ensure that emails synced while the daemon was offline
+    // or existing emails on fresh boots are indexed into the database.
+    let startup_dirs = target_directories.clone();
+    
     thread::spawn(move || {
-        initial_pipeline.run_indexer(target_dirs_clone, max_depth); 
+        initial_pipeline.run_indexer(startup_dirs, max_depth);
     });
 
     // MARK AND SWEEP GARBAGE COLLECTION
     let gc_store = Arc::clone(&vector_store);
     thread::spawn(move || {
-        // Wait 5 minutes to let the CPU settle after the boot-up ingestion sweep
-        // This ensures the user experiences no lag when first logging in.
         thread::sleep(std::time::Duration::from_secs(300));
         println!("[Daemon] Running background Garbage Collection sweep...");
         gc_store.prune_orphans();
@@ -300,20 +324,23 @@ fn main() -> std::io::Result<()> {
 
     println!("Loading Gnome Lens Triggers:");
     for trigger in &index_triggers {
-        println!("  ✓ {}", trigger.name());
+        println!("    {}", trigger.name());
+        // INotify receives the FULL list of target_directories (including mail_dir) 
+        // to guarantee real-time indexing of all incoming network downloads.
         trigger.start(target_directories.clone(), max_depth, Arc::clone(&pipeline));
     }
 
+    // Pass the vector store ARC into the EmailPlugin so it can execute DB queries
     let plugins: Vec<Box<dyn PluginTool>> = vec![
         Box::new(MathPlugin),
-        Box::new(EmailPlugin),
+        Box::new(EmailPlugin::new(Arc::clone(&vector_store))),
         Box::new(AppLauncherPlugin::new()),
         Box::new(VectorSearchPlugin::new(Arc::clone(&vector_store))),
     ];
 
     println!("Loading Gnome Lens Plugins:");
     for plugin in &plugins {
-        println!("  ✓ {} [{}]", plugin.name(), plugin.id());
+        println!("    {} [{}]", plugin.name(), plugin.id());
     }
 
     let router = Arc::new(SystemRouter::new(plugins, Arc::clone(&vector_store), &config_dir));
@@ -321,6 +348,7 @@ fn main() -> std::io::Result<()> {
     if Path::new(&socket_path).exists() {
         fs::remove_file(&socket_path)?;
     }
+
     let listener = UnixListener::bind(&socket_path)?;
     
     let mut perms = fs::metadata(&socket_path)?.permissions();

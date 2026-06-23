@@ -52,6 +52,88 @@ where
         return true;
     }
 
+    // ACTION: Return Mail Sync Status
+    if json["action"].as_str() == Some("get_mail_status") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let state_file = std::path::Path::new(&home).join(".config/gnome-lens/gmail_state.json");
+        
+        if let Ok(state_data) = std::fs::read_to_string(&state_file) {
+            if let Ok(state_json) = serde_json::from_str::<serde_json::Value>(&state_data) {
+                send_chunk(serde_json::json!({
+                    "status": "mail_status",
+                    "data": state_json
+                }).to_string());
+                return true;
+            }
+        }
+        
+        send_chunk(serde_json::json!({
+            "status": "mail_status",
+            "data": { "is_syncing": false, "message": "Idle or credentials missing." }
+        }).to_string());
+        return true;
+    }
+
+    // ACTION: Reset Mail Sync State (Force Re-Sync)
+    if json["action"].as_str() == Some("mail_resync") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let state_file = std::path::Path::new(&home).join(".config/gnome-lens/gmail_state.json");
+        
+        // Setting last_uid to 0 forces the Daemon to run the history_years boundary check on its next 60s tick
+        let _ = std::fs::write(&state_file, serde_json::json!({
+            "last_uid": 0,
+            "is_syncing": false,
+            "total_emails": 0,
+            "synced_emails": 0,
+            "message": "Re-sync initialized. Waiting for next daemon tick...",
+            "is_error": false,
+            "uncommitted_backlog": []
+        }).to_string());
+        
+        send_chunk(serde_json::json!({
+            "status": "done",
+            "message": "Mail sync state reset."
+        }).to_string());
+        return true;
+    }
+
+    // ACTION: Wipe Mail Data
+    if json["action"].as_str() == Some("mail_wipe") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let mail_dir = std::path::Path::new(&home).join(".local/share/gnome-lens/mail");
+        let state_file = std::path::Path::new(&home).join(".config/gnome-lens/gmail_state.json");
+
+        // 1. Delete all active .eml files from the disk cache
+        if let Ok(entries) = std::fs::read_dir(&mail_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("eml") {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+        
+        // 2. Reset the IMAP sequence state so it knows to redownload them later
+        let _ = std::fs::write(&state_file, serde_json::json!({
+            "last_uid": 0,
+            "is_syncing": false,
+            "total_emails": 0,
+            "synced_emails": 0,
+            "message": "Mail data wiped. Awaiting re-sync.",
+            "is_error": false,
+            "uncommitted_backlog": []
+        }).to_string());
+
+        // 3. Immediately purge the orphaned vectors from the database index
+        store.prune_orphans();
+
+        send_chunk(serde_json::json!({
+            "status": "done",
+            "message": "All mail data and vectors cleared."
+        }).to_string());
+        return true;
+    }
+
     // ACTION: Trigger Database Re-index
     if json["action"].as_str() == Some("reindex") {
         store.force_reindex_all();

@@ -1,8 +1,10 @@
 // src/triggers/mod.rs
 pub mod inotify_watcher;
+pub mod gmail_sync;
 
 // Re-export the trigger so it can be cleanly imported from crate::triggers
 pub use inotify_watcher::INotifyTrigger;
+pub use gmail_sync::GmailSyncDaemon;
 
 use std::sync::Arc;
 use crate::ingestion::IngestionPipeline;
