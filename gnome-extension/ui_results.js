@@ -7,7 +7,7 @@ import GObject from 'gi://GObject';
 
 export const GnomeLensResultsList = GObject.registerClass(
 class GnomeLensResultsList extends St.ScrollView {
-    _init(callbacks) {
+    _init(settings, callbacks) {
         super._init({
             style_class: 'lens-results-scroll',
             x_expand: true,
@@ -16,6 +16,7 @@ class GnomeLensResultsList extends St.ScrollView {
             vscrollbar_policy: St.PolicyType.AUTOMATIC,
         });
 
+        this._settings = settings;
         this.callbacks = callbacks || {};
         this._results = [];
         this._resultWidgets = [];
@@ -31,6 +32,10 @@ class GnomeLensResultsList extends St.ScrollView {
         });
         
         this.add_child(this._resultsBox);
+    }
+
+    getResults() {
+        return this._results;
     }
 
     addSynthesisWidget(widget) {
@@ -157,21 +162,40 @@ class GnomeLensResultsList extends St.ScrollView {
 
         this.clear();
         
+        let getExt = (r) => {
+            if (r.metadata && r.metadata.filetype) {
+                return r.metadata.filetype.toLowerCase();
+            } else if (r.filepath) {
+                let parts = r.filepath.split('.');
+                if (parts.length > 1) {
+                    return parts.pop().toLowerCase();
+                }
+            }
+            return '';
+        };
+
+        let isFolderResult = (r) => {
+            let ext = getExt(r);
+            return ['directory', 'folder', 'inode/directory'].includes(ext) || r.plugin_id === 'plugin:folder' || r.plugin_id === 'plugin:directory';
+        };
+
+        let getGroup = (r) => {
+            if (isFolderResult(r)) return 0;
+            if (r.plugin_id === 'plugin:app_launcher' || r.plugin_id === 'plugin:math') return 1;
+            if (r.metadata && r.metadata.shallow_index === 'true') return 3;
+            return 2;
+        };
+        
         // Advanced Grouping and Sorting Pipeline
         this._results = [...resultsArray].sort((a, b) => {
             let aMatch = a.ai_matched !== false;
             let bMatch = b.ai_matched !== false;
             if (aMatch !== bMatch) return aMatch ? -1 : 1;
 
-            let getGroup = (r) => {
-                if (r.plugin_id === 'plugin:app_launcher' || r.plugin_id === 'plugin:math') return 0;
-                if (r.metadata && r.metadata.shallow_index === 'true') return 2;
-                return 1;
-            };
-            
             let groupA = getGroup(a);
             let groupB = getGroup(b);
             
+            // 0 (Folders) will always sort before 1, 2, and 3
             if (groupA !== groupB) return groupA - groupB;
             
             return b.score - a.score;
@@ -179,14 +203,14 @@ class GnomeLensResultsList extends St.ScrollView {
 
         let maxRender = Math.min(this._results.length, 30);
         let currentGroup = -1;
-        let groupNames = ["Applications & Tools", "Indexed Documents", "Other Files"];
+        let groupNames = ["Folders", "Applications & Tools", "Indexed Documents", "Other Files"];
 
         for (let i = 0; i < maxRender; i++) {
             let res = this._results[i];
             
-            let group = 1;
-            if (res.plugin_id === 'plugin:app_launcher' || res.plugin_id === 'plugin:math') group = 0;
-            else if (res.metadata && res.metadata.shallow_index === 'true') group = 2;
+            let ext = getExt(res);
+            let isFolder = isFolderResult(res);
+            let group = getGroup(res);
             
             if (group !== currentGroup) {
                 let header = new St.Label({
@@ -239,19 +263,11 @@ class GnomeLensResultsList extends St.ScrollView {
             let isPdfPreview = false;
             let iconName = 'text-x-generic-symbolic';
             let gicon = null;
-            
-            let ext = '';
-            if (res.metadata && res.metadata.filetype) {
-                ext = res.metadata.filetype.toLowerCase();
-            } else if (res.filepath) {
-                let parts = res.filepath.split('.');
-                if (parts.length > 1) {
-                    ext = parts.pop().toLowerCase();
-                }
-            }
 
             if (ext) {
-                if (['png', 'jpg', 'jpeg', 'bmp', 'webp', 'svg', 'gif'].includes(ext)) {
+                if (isFolder) {
+                    iconName = 'folder-symbolic';
+                } else if (['png', 'jpg', 'jpeg', 'bmp', 'webp', 'svg', 'gif'].includes(ext)) {
                     isImagePreview = true;
                     iconName = 'image-x-generic-symbolic';
                 } else if (['mp4', 'mkv', 'webm', 'avi', 'mov', 'flv'].includes(ext)) {
@@ -302,13 +318,49 @@ class GnomeLensResultsList extends St.ScrollView {
                 y_align: Clutter.ActorAlign.CENTER,
             });
 
+            let titleBox = new St.BoxLayout({
+                vertical: false,
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true,
+            });
+
             let title = new St.Label({
                 text: res.title || 'Unknown Document',
                 style_class: 'lens-result-title',
+                y_align: Clutter.ActorAlign.CENTER,
             });
-            textBox.add_child(title);
+            titleBox.add_child(title);
 
-            if (res.snippet) {
+            if (res.filepath && res.plugin_id !== 'plugin:math') {
+                let parentPathStr = res.filepath;
+                let lastSlash = parentPathStr.lastIndexOf('/');
+                if (lastSlash > 0) {
+                    parentPathStr = parentPathStr.substring(0, lastSlash);
+                } else if (lastSlash === 0) {
+                    parentPathStr = '/';
+                }
+                
+                let home = GLib.get_home_dir();
+                if (parentPathStr.startsWith(home)) {
+                    parentPathStr = '~' + parentPathStr.substring(home.length);
+                }
+                
+                let pathLabel = new St.Label({
+                    text: 'in ' + parentPathStr,
+                    style_class: 'lens-result-path-inline',
+                    y_align: Clutter.ActorAlign.CENTER,
+                });
+                titleBox.add_child(pathLabel);
+            }
+
+            textBox.add_child(titleBox);
+
+            let showSnippet = true;
+            if (res.plugin_id === 'plugin:vector_db') {
+                showSnippet = this._settings.get_boolean('show-document-text');
+            }
+
+            if (res.snippet && showSnippet) {
                 let cleanSnippet = res.snippet.replace(/<\/?b>/g, '').trim();
                 let snippet = new St.Label({
                     text: cleanSnippet.length > 100 ? cleanSnippet.substring(0, 100) + '...' : cleanSnippet,
@@ -336,6 +388,96 @@ class GnomeLensResultsList extends St.ScrollView {
                 x_expand: true,
                 y_align: Clutter.ActorAlign.CENTER,
             });
+
+            if (res.filepath && res.plugin_id !== 'plugin:app_launcher' && res.plugin_id !== 'plugin:math') {
+                let pillBox = new St.BoxLayout({
+                    vertical: false,
+                    style_class: 'lens-result-folder-pill',
+                    y_align: Clutter.ActorAlign.CENTER,
+                    visible: false,
+                });
+                let pillLabel = new St.Label({
+                    text: '...',
+                    style_class: 'lens-result-folder-pill-text',
+                    y_align: Clutter.ActorAlign.CENTER,
+                });
+                pillBox.add_child(pillLabel);
+                actionBox.add_child(pillBox);
+
+                let expandedPath = res.filepath;
+                if (expandedPath.startsWith('~/')) {
+                    expandedPath = GLib.get_home_dir() + expandedPath.slice(1);
+                }
+                
+                let file = Gio.File.new_for_path(expandedPath);
+                let cancellable = new Gio.Cancellable();
+                
+                itemBox.connect('destroy', () => {
+                    if (!cancellable.is_cancelled()) {
+                        cancellable.cancel();
+                    }
+                });
+
+                if (isFolder) {
+                    file.enumerate_children_async(
+                        'standard::name',
+                        Gio.FileQueryInfoFlags.NONE,
+                        GLib.PRIORITY_LOW,
+                        cancellable,
+                        (f, r) => {
+                            try {
+                                let iter = f.enumerate_children_finish(r);
+                                if (cancellable.is_cancelled()) return;
+                                
+                                let count = 0;
+                                let nextBatch = () => {
+                                    iter.next_files_async(50, GLib.PRIORITY_LOW, cancellable, (it, queryRes) => {
+                                        try {
+                                            let files = it.next_files_finish(queryRes);
+                                            if (cancellable.is_cancelled()) return;
+                                            
+                                            if (files && files.length > 0) {
+                                                count += files.length;
+                                                nextBatch();
+                                            } else {
+                                                pillLabel.set_text(`${count} items`);
+                                                pillBox.show();
+                                                it.close_async(GLib.PRIORITY_LOW, null, () => {});
+                                            }
+                                        } catch(e) { }
+                                    });
+                                };
+                                nextBatch();
+                            } catch (e) { }
+                        }
+                    );
+                } else {
+                    file.query_info_async(
+                        Gio.FILE_ATTRIBUTE_STANDARD_SIZE,
+                        Gio.FileQueryInfoFlags.NONE,
+                        GLib.PRIORITY_LOW,
+                        cancellable,
+                        (f, r) => {
+                            try {
+                                let info = f.query_info_finish(r);
+                                if (cancellable.is_cancelled()) return;
+                                
+                                let sizeBytes = info.get_size();
+                                let sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+                                let x = 0;
+                                let s = sizeBytes;
+                                while (s >= 1024 && x < sizes.length - 1) {
+                                    s /= 1024;
+                                    x++;
+                                }
+                                let sizeStr = (s < 10 && x > 0 ? s.toFixed(1) : Math.round(s)) + ' ' + sizes[x];
+                                pillLabel.set_text(`${sizeStr}`);
+                                pillBox.show();
+                            } catch (e) { }
+                        }
+                    );
+                }
+            }
 
             if (res.filepath) {
                 let openFolderBtn = new St.Button({

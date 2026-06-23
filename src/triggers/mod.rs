@@ -12,6 +12,6 @@ pub trait IndexTrigger: Send + Sync {
     fn name(&self) -> &'static str;
     
     /// Binds the trigger to multiple directories and gives it a thread-safe reference 
-    /// to the AI ingestion pipeline.
-    fn start(&self, target_dirs: Vec<String>, pipeline: Arc<IngestionPipeline>);
+    /// to the AI ingestion pipeline, while respecting dynamic max_depth limitations.
+    fn start(&self, target_dirs: Vec<String>, max_depth: usize, pipeline: Arc<IngestionPipeline>);
 }

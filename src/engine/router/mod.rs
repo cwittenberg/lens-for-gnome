@@ -58,6 +58,7 @@ impl SystemRouter {
                 json,
                 &self.llm,
                 &self.vision,
+                &self.store, // Passed the vector store for maintenance IPC commands
                 Arc::clone(&is_cancelled),
                 req_start,
                 &mut send_chunk
@@ -79,6 +80,11 @@ impl SystemRouter {
             Err(_) => None,
         };
 
+        let prioritize_folders = match parsed {
+            Ok(ref json) => json["prioritize_folders"].as_bool().unwrap_or(true),
+            Err(_) => true,
+        };
+
         if query_text.trim().is_empty() {
             send_chunk(r#"{"status": "done", "results": []}"#.to_string());
             return;
@@ -91,17 +97,23 @@ impl SystemRouter {
             max_timestamp: None,
             metadata_filters: HashMap::new(),
             filter_strategy,
+            prioritize_folders,
         };
 
         if search_query.is_synthesis_request {
             search_query.raw_text = search_query.raw_text[1..].trim().to_string();
         }
 
-        let filetypes = vec!["pdf", "docx", "txt", "csv", "png", "jpg", "xlsx"];
+        let filetypes = vec!["pdf", "docx", "txt", "csv", "png", "jpg", "xlsx", "directory"];
         for ft in &filetypes {
             if search_query.raw_text.to_lowercase().contains(ft) {
                 search_query.metadata_filters.insert("filetype".to_string(), ft.to_string());
             }
+        }
+
+        // Alias "folder" queries directly to the "directory" database metadata tag
+        if search_query.raw_text.to_lowercase().contains("folder") {
+            search_query.metadata_filters.insert("filetype".to_string(), "directory".to_string());
         }
 
         let lower_q = search_query.raw_text.to_lowercase();

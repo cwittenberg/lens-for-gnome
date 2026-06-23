@@ -114,9 +114,14 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
     setQuery(text, selectAll = true) {
         this._entry.set_text(text);
-        if (selectAll && text.length > 0) {
+        if (text.length > 0) {
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                this._entry.clutter_text.set_selection(-1, -1);
+                let len = text.length;
+                if (selectAll) {
+                    this._entry.clutter_text.set_selection(0, len);
+                } else {
+                    this._entry.clutter_text.set_selection(len, len);
+                }
                 return GLib.SOURCE_REMOVE;
             });
         }
@@ -133,7 +138,12 @@ class GnomeLensSearchBar extends St.BoxLayout {
         let text = this._entry.get_text();
         if (text && text.length > 0) {
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                this._entry.clutter_text.set_selection(-1, -1);
+                let len = text.length;
+                if (this._settings.get_boolean('select-text-on-focus')) {
+                    this._entry.clutter_text.set_selection(0, len);
+                } else {
+                    this._entry.clutter_text.set_selection(len, len);
+                }
                 return GLib.SOURCE_REMOVE;
             });
         }

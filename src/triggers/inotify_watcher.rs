@@ -1,69 +1,198 @@
 // src/triggers/inotify_watcher.rs
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
 use std::thread;
-use notify::{Watcher, RecursiveMode, Event, EventKind};
-use notify::event::ModifyKind;
+use std::time::{Duration, Instant};
+
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use walkdir::WalkDir;
+
 use crate::ingestion::IngestionPipeline;
 use super::IndexTrigger;
 
 pub struct INotifyTrigger;
 
-impl IndexTrigger for INotifyTrigger {
-    fn name(&self) -> &'static str { "Kernel INotify Watcher" }
+const EVENT_DEBOUNCE: Duration = Duration::from_millis(500);
+const RX_IDLE_TICK: Duration = Duration::from_millis(100);
 
-    fn start(&self, target_dirs: Vec<String>, pipeline: Arc<IngestionPipeline>) {
-        thread::spawn(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            
-            // RecommendedWatcher automatically maps to the most efficient OS implementation
-            // (inotify on Linux, kqueue on macOS, ReadDirectoryChanges on Windows).
-            let mut watcher = notify::RecommendedWatcher::new(tx, notify::Config::default())
-                .expect("Failed to initialize kernel file watcher");
-            
-            for dir in target_dirs {
-                if let Err(e) = watcher.watch(Path::new(&dir), RecursiveMode::Recursive) {
-                    // Graceful Degradation: If we hit fs.inotify.max_user_watches, log a warning 
-                    // and continue with the directories we successfully registered, rather than panicking.
-                    eprintln!("[INotify Warning] Could not watch directory '{}': {}", dir, e);
-                    eprintln!("  -> Hint: You may need to increase fs.inotify.max_user_watches in sysctl.conf");
-                } else {
-                    println!("  -> Kernel watching active on: {}", dir);
+/// Checks if any part of the path is hidden.
+/// Explicitly ignores GTK's temporary save files to prevent massive parent directory re-walks.
+fn is_hidden(path: &Path) -> bool {
+    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+    if file_name.starts_with(".goutputstream") || file_name.ends_with(".tmp") {
+        return true;
+    }
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        s.starts_with('.') && s != "." && s != ".."
+    })
+}
+
+/// Calculates depth relative to the configured base watch directories.
+/// Highly robust fallback mechanism to handle symlinks and un-canonicalizable transient paths.
+fn get_depth(path: &Path, bases: &[PathBuf], raw_bases: &[PathBuf]) -> Option<usize> {
+    let clean = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    
+    for (i, b) in bases.iter().enumerate() {
+        // 1. Try canonicalized path against canonicalized base
+        if let Ok(stripped) = clean.strip_prefix(b) {
+            return Some(stripped.components().count());
+        }
+        // 2. Fallback: Try raw path against canonicalized base
+        if let Ok(stripped) = path.strip_prefix(b) {
+            return Some(stripped.components().count());
+        }
+        // 3. Fallback: Try raw path against raw base (preserves exact string matches)
+        if let Ok(stripped) = path.strip_prefix(&raw_bases[i]) {
+            return Some(stripped.components().count());
+        }
+    }
+    None
+}
+
+/// Recursively scans, watches, and indexes a path while respecting depth limits.
+/// O(1) execution for files and known directories to prevent freeze loops.
+fn process_path(
+    watcher: &mut RecommendedWatcher,
+    watched: &mut HashSet<PathBuf>,
+    path: &Path,
+    max_depth: usize,
+    pipeline: &Arc<IngestionPipeline>,
+    base_paths: &[PathBuf],
+    raw_base_paths: &[PathBuf],
+    skip_indexing: bool,
+) {
+    if !path.exists() || is_hidden(path) {
+        pipeline.remove_file(path);
+        return;
+    }
+
+    let root_depth = match get_depth(path, base_paths, raw_base_paths) {
+        Some(d) if d <= max_depth => d,
+        _ => return, // Path is not within target boundaries or exceeds max depth
+    };
+
+    // Fast-path: Individual files are indexed instantly without directory traversal.
+    if path.is_file() {
+        if !skip_indexing { pipeline.index_file(path); }
+        return;
+    }
+
+    if path.is_dir() {
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        
+        // Fast-path: If the directory is already watched, do NOT re-traverse it.
+        // Any individual files modified inside it will trigger their own isolated events.
+        if watched.contains(&key) {
+            if !skip_indexing { pipeline.index_file(path); }
+            return;
+        }
+
+        // If it's a NEW directory (or initial boot), traverse it to place inotify watches
+        // on all its subdirectories up to max_depth.
+        let remaining_depth = max_depth - root_depth;
+        for entry in WalkDir::new(path).max_depth(remaining_depth).follow_links(true).into_iter().flatten() {
+            let sub_path = entry.path();
+            if is_hidden(sub_path) { continue; }
+
+            if sub_path.is_dir() {
+                let sub_key = sub_path.canonicalize().unwrap_or_else(|_| sub_path.to_path_buf());
+                if watched.insert(sub_key) {
+                    let _ = watcher.watch(sub_path, RecursiveMode::NonRecursive);
                 }
             }
+            
+            if !skip_indexing { pipeline.index_file(sub_path); }
+        }
+    }
+}
 
-            for res in rx {
-                match res {
+impl IndexTrigger for INotifyTrigger {
+    fn name(&self) -> &'static str {
+        "Kernel INotify Watcher"
+    }
+
+    fn start(&self, target_dirs: Vec<String>, max_depth: usize, pipeline: Arc<IngestionPipeline>) {
+        thread::spawn(move || {
+            let (tx, rx) = mpsc::channel();
+            let mut watcher = RecommendedWatcher::new(
+                move |res| { if let Ok(e) = res { let _ = tx.send(e); } },
+                Config::default(),
+            ).expect("Failed to initialize kernel watcher");
+
+            let mut watched = HashSet::new();
+            let mut pending = HashMap::<PathBuf, Instant>::new();
+            
+            // Retain raw paths for safety fallback if canonicalization drops components
+            let raw_base_paths: Vec<PathBuf> = target_dirs.iter()
+                .map(|d| PathBuf::from(d))
+                .collect();
+
+            let base_paths: Vec<PathBuf> = target_dirs.iter()
+                .map(|d| Path::new(d).canonicalize().unwrap_or_else(|_| PathBuf::from(d)))
+                .collect();
+
+            // 1. Diagnostic Kernel Probe
+            let test_dir = std::env::temp_dir().join(format!("gnome_lens_inotify_test_{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&test_dir);
+            if watcher.watch(&test_dir, RecursiveMode::NonRecursive).is_ok() {
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(500));
+                    let _ = std::fs::write(test_dir.join("test.txt"), "PING");
+                    thread::sleep(Duration::from_millis(500));
+                    let _ = std::fs::remove_dir_all(&test_dir);
+                });
+            }
+
+            // 2. Initial Setup (Fast Watch Placement)
+            // We skip indexing here because the dedicated Rayon pipeline thread is already 
+            // doing the heavy lifting. We just need to place the kernel watches instantly.
+            for dir in &target_dirs {
+                process_path(&mut watcher, &mut watched, Path::new(dir), max_depth, &pipeline, &base_paths, &raw_base_paths, true);
+                println!("  -> Kernel watching active on: {} (Max Depth: {})", dir, max_depth);
+            }
+
+            // 3. Event Loop
+            loop {
+                match rx.recv_timeout(RX_IDLE_TICK) {
                     Ok(Event { kind, paths, .. }) => {
-                        match kind {
-                            EventKind::Create(_) | EventKind::Modify(ModifyKind::Data(_)) => {
-                                for path in paths {
-                                    if path.is_file() {
-                                        pipeline.index_file(&path);
-                                    }
+                        // Broadly capture all modification, creation, rename, and deletion events
+                        // while explicitly filtering out pure read accesses to prevent indexing loops.
+                        if !matches!(kind, EventKind::Access(_)) {
+                            for p in paths {
+                                if p.to_string_lossy().contains("gnome_lens_inotify_test") {
+                                    println!("[INotify] Kernel loopback test successful.");
+                                    continue;
                                 }
-                            },
-                            EventKind::Remove(_) => {
-                                for path in paths {
-                                    pipeline.remove_file(&path);
+                                if !is_hidden(&p) {
+                                    pending.insert(p.clone(), Instant::now() + EVENT_DEBOUNCE);
                                 }
-                            },
-                            EventKind::Modify(ModifyKind::Name(_)) => {
-                                // For renames/moves, verify if the current target is an active file
-                                for path in paths {
-                                    if path.exists() {
-                                        if path.is_file() {
-                                            pipeline.index_file(&path);
-                                        }
-                                    } else {
-                                        pipeline.remove_file(&path);
-                                    }
-                                }
-                            },
-                            _ => {}
+                            }
                         }
-                    },
-                    Err(e) => eprintln!("INotify watch error: {:?}", e),
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
+                    _ => {}
+                }
+
+                // 4. Drain Debounced Events
+                let now = Instant::now();
+                let due: Vec<PathBuf> = pending.iter()
+                    .filter(|(_, &time)| time <= now)
+                    .map(|(p, _)| p.clone())
+                    .collect();
+
+                for path in due {
+                    pending.remove(&path);
+                    if path.exists() {
+                        // Real-time events MUST be indexed
+                        process_path(&mut watcher, &mut watched, &path, max_depth, &pipeline, &base_paths, &raw_base_paths, false);
+                    } else {
+                        pipeline.remove_file(&path);
+                        let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+                        watched.remove(&key);
+                    }
                 }
             }
         });

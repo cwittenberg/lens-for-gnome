@@ -24,32 +24,92 @@ use crate::plugins::{MathPlugin, EmailPlugin, AppLauncherPlugin, VectorSearchPlu
 use crate::engine::{SystemRouter, ThreadPool};
 use crate::triggers::{INotifyTrigger, IndexTrigger};
 
+/// Helper to configure the gsettings command securely, 
+/// injecting the local schema path if running in development mode.
+fn build_gsettings_cmd() -> Command {
+    let mut cmd = Command::new("gsettings");
+    
+    // Inject schema dir for local development via ./run.sh
+    if Path::new("schemas").exists() {
+        cmd.env("GSETTINGS_SCHEMA_DIR", "schemas");
+    } else if let Ok(home) = env::var("HOME") {
+        // Fallback for user-local installations
+        let ext_schema = format!("{}/.local/share/gnome-shell/extensions/gnome-lens/schemas", home);
+        if Path::new(&ext_schema).exists() {
+            cmd.env("GSETTINGS_SCHEMA_DIR", ext_schema);
+        }
+    }
+    
+    cmd
+}
+
 fn get_gsettings_bool(key: &str) -> bool {
-    if let Ok(output) = Command::new("gsettings")
+    if let Ok(output) = build_gsettings_cmd()
         .arg("get")
         .arg("org.gnome.shell.extensions.gnome-lens")
         .arg(key)
         .output()
     {
+        if !output.status.success() {
+            eprintln!("[GSettings Error] Failed to read {}: {}", key, String::from_utf8_lossy(&output.stderr).trim());
+        }
         return String::from_utf8_lossy(&output.stdout).trim() == "true";
     }
     false
 }
 
-fn get_gsettings_array(key: &str) -> Vec<String> {
-    if let Ok(output) = Command::new("gsettings")
+fn get_gsettings_int(key: &str, default: usize) -> usize {
+    if let Ok(output) = build_gsettings_cmd()
         .arg("get")
         .arg("org.gnome.shell.extensions.gnome-lens")
         .arg(key)
         .output()
     {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Clean the gsettings array format: ['item1', 'item2'] -> item1, item2
-        let cleaned = stdout.replace("['", "").replace("']", "").replace('\'', "");
-        if cleaned.trim().is_empty() || cleaned.trim() == "[]" {
+        if !output.status.success() {
+            eprintln!("[GSettings Error] Failed to read {}: {}", key, String::from_utf8_lossy(&output.stderr).trim());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let parts: Vec<&str> = stdout.split_whitespace().collect();
+        if let Some(last) = parts.last() {
+            if let Ok(val) = last.parse::<usize>() {
+                return val;
+            }
+        }
+    }
+    default
+}
+
+fn get_gsettings_array(key: &str) -> Vec<String> {
+    if let Ok(output) = build_gsettings_cmd()
+        .arg("get")
+        .arg("org.gnome.shell.extensions.gnome-lens")
+        .arg(key)
+        .output()
+    {
+        if !output.status.success() {
+            eprintln!("[GSettings Error] Failed to read {}: {}", key, String::from_utf8_lossy(&output.stderr).trim());
             return Vec::new();
         }
-        return cleaned.split(", ").map(|s| s.to_string()).collect();
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        println!("[Boot DEBUG] Raw gsettings output for {}: {:?}", key, stdout);
+        
+        let cleaned = stdout
+            .replace("[", "")
+            .replace("]", "")
+            .replace("'", "")
+            .replace("\"", "")
+            .replace("@as", "");
+            
+        let mut results = Vec::new();
+        for s in cleaned.split(',') {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                results.push(trimmed.to_string());
+            }
+        }
+        println!("[Boot DEBUG] Parsed gsettings array for {}: {:?}", key, results);
+        return results;
     }
     Vec::new()
 }
@@ -124,18 +184,26 @@ fn main() -> std::io::Result<()> {
     }
     let socket_path = format!("{}/gnome_lens.sock", state_dir);
 
+    let max_depth = get_gsettings_int("index-max-depth", 3);
+
     if args.len() > 1 {
         let command = &args[1];
 
-        if command == "index" {
+        if command == "index" || command == "reindex" {
             let vector_store = Arc::new(VectorStore::new(&db_path));
+            
+            if command == "reindex" {
+                println!("Force re-index requested. Resetting all database timestamps...");
+                vector_store.force_reindex_all();
+            }
+
             if let Some(target_dir) = args.get(2) {
                 let blacklist = get_gsettings_array("index-blacklist");
                 println!("Triggering manual recursive ingestion for: {}", target_dir);
                 let pipeline = IngestionPipeline::new(Arc::clone(&vector_store), &config_dir, blacklist);
-                pipeline.run_indexer(vec![target_dir.clone()]);
+                pipeline.run_indexer(vec![target_dir.clone()], max_depth);
             } else {
-                eprintln!("Error: Please provide a directory path. Usage: gnome-lens index /path/to/dir");
+                eprintln!("Error: Please provide a directory path. Usage: gnome-lens {} /path/to/dir", command);
             }
             return Ok(());
         } else {
@@ -160,9 +228,17 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    if max_depth > 3 {
+        println!("\n===================================================================");
+        println!("[WARNING] Max recursion depth is set to {} (Default is 3).", max_depth);
+        println!("Linux has a strict kernel limit on inotify watches (fs.inotify.max_user_watches).");
+        println!("If the daemon fails to watch all files, you MUST increase this OS limit:");
+        println!("Execute: echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf && sudo sysctl -p");
+        println!("===================================================================\n");
+    }
+
     let vector_store = Arc::new(VectorStore::new(&db_path));
     
-    // Dynamically build the target pools from User Prefs via GSettings
     let is_full_system = get_gsettings_bool("index-full-system");
     let blacklist = get_gsettings_array("index-blacklist");
     let mut target_directories = Vec::new();
@@ -172,24 +248,50 @@ fn main() -> std::io::Result<()> {
         target_directories.push(home_dir.clone());
     } else {
         println!("[Boot] Custom Path Indexation Enabled.");
-        let user_paths = get_gsettings_array("index-paths");
+        let mut user_paths = get_gsettings_array("index-paths");
+        
+        if user_paths.is_empty() {
+            println!("[Boot Warning] No user paths retrieved from gsettings. Defaulting to home directory (~).");
+            user_paths.push("~".to_string());
+        }
+
         for p in user_paths {
             let expanded_path = p.replace("~", &home_dir);
             target_directories.push(expanded_path);
         }
-        // Always include these absolute basics for the Universal App Launcher to work
         target_directories.push("/usr/share/applications".to_string());
         target_directories.push("/etc".to_string());
     }
 
-    target_directories.retain(|dir| Path::new(dir).exists());
+    println!("[Boot DEBUG] Target directories before validation: {:?}", target_directories);
+    
+    target_directories.retain(|dir| {
+        let exists = Path::new(dir).exists();
+        if !exists {
+            println!("[Boot Warning] Dropping directory because it does not exist on disk: {}", dir);
+        }
+        exists
+    });
+    
+    println!("[Boot DEBUG] Target directories after validation (passed to watcher): {:?}", target_directories);
 
     let pipeline = Arc::new(IngestionPipeline::new(Arc::clone(&vector_store), &config_dir, blacklist));
 
+    // STARTUP RECONCILIATION
     let initial_pipeline = Arc::clone(&pipeline);
     let target_dirs_clone = target_directories.clone();
     thread::spawn(move || {
-        initial_pipeline.run_indexer(target_dirs_clone); 
+        initial_pipeline.run_indexer(target_dirs_clone, max_depth); 
+    });
+
+    // MARK AND SWEEP GARBAGE COLLECTION
+    let gc_store = Arc::clone(&vector_store);
+    thread::spawn(move || {
+        // Wait 5 minutes to let the CPU settle after the boot-up ingestion sweep
+        // This ensures the user experiences no lag when first logging in.
+        thread::sleep(std::time::Duration::from_secs(300));
+        println!("[Daemon] Running background Garbage Collection sweep...");
+        gc_store.prune_orphans();
     });
 
     let index_triggers: Vec<Box<dyn IndexTrigger>> = vec![
@@ -199,7 +301,7 @@ fn main() -> std::io::Result<()> {
     println!("Loading Gnome Lens Triggers:");
     for trigger in &index_triggers {
         println!("  ✓ {}", trigger.name());
-        trigger.start(target_directories.clone(), Arc::clone(&pipeline));
+        trigger.start(target_directories.clone(), max_depth, Arc::clone(&pipeline));
     }
 
     let plugins: Vec<Box<dyn PluginTool>> = vec![
@@ -214,7 +316,6 @@ fn main() -> std::io::Result<()> {
         println!("  ✓ {} [{}]", plugin.name(), plugin.id());
     }
 
-    // Pass the active vector store to the router so the AST engine can natively read metadata
     let router = Arc::new(SystemRouter::new(plugins, Arc::clone(&vector_store), &config_dir));
 
     if Path::new(&socket_path).exists() {

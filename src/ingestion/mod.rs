@@ -214,27 +214,38 @@ impl IngestionPipeline {
     }
 
     pub fn index_file(&self, path: &Path) {
-        if !path.is_file() { return; }
+        if !path.exists() { return; }
+        let is_dir = path.is_dir();
+        if !is_dir && !path.is_file() { return; }
         
         let path_str = path.to_string_lossy().to_string();
 
+        // Enforce nanosecond precision. SQLite uses i64 which safely holds nanosecond timestamps until the year 2262.
+        // This permanently fixes the collision bug where files saved by GTK/GNOME within the same millisecond were dropped.
         let modified_at = path.metadata()
             .ok()
             .and_then(|m| m.modified().ok().or_else(|| m.created().ok()))
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64);
 
         if let Some(db_modified) = self.store.get_document_modified_at(&path_str) {
             if modified_at <= db_modified {
-                return; // Skip reindexing, file is unchanged
+                return; // Skip reindexing, file/folder is unchanged
             }
         }
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("unknown").to_lowercase();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let ext = if is_dir {
+            "directory".to_string()
+        } else {
+            path.extension().and_then(|e| e.to_str()).unwrap_or("unknown").to_lowercase()
+        };
 
-        let (content, is_shallow) = if let Some(extractor) = self.extractors.iter().find(|e| e.can_handle(&ext)) {
+        // Inject the target keywords directly into the FTS engine so it naturally matches lexical "folder" queries
+        let (mut content, mut is_shallow) = if is_dir {
+            ("Folder Directory".to_string(), true)
+        } else if let Some(extractor) = self.extractors.iter().find(|e| e.can_handle(&ext)) {
             match extractor.extract(path) {
                 Ok(extracted_text) => (self.smart_truncate(&extracted_text, MAX_DOC_BYTES), false),
                 Err(_) => (String::new(), true),
@@ -242,6 +253,13 @@ impl IngestionPipeline {
         } else {
             (String::new(), true)
         };
+
+        // CRITICAL FIX: The embedding model fails silently and aborts the function returning `None` if fed an empty string. 
+        // This forces empty screenshots to embed gracefully as their title.
+        if content.trim().is_empty() {
+            content = format!("Filename: {}", path.file_name().unwrap_or_default().to_string_lossy());
+            is_shallow = true;
+        }
 
         let mut metadata = self.extract_entities(&content, &ext);
         metadata.insert("created_at".to_string(), modified_at.to_string());
@@ -279,13 +297,17 @@ impl IngestionPipeline {
         name.starts_with('.') || self.blacklist.contains(&name.to_string())
     }
 
-    pub fn run_indexer(&self, target_dirs: Vec<String>) {
+    pub fn run_indexer(&self, target_dirs: Vec<String>, max_depth: usize) {
+        println!("[Indexer] Fetching existing index state for reconciliation...");
+        let db_state = self.store.get_all_document_timestamps();
+        let mut missing_or_modified = Vec::new();
+
         for target_dir in target_dirs {
-            println!("Starting indexer pass on: {}", target_dir);
-            
-            let mut entries = Vec::new();
+            println!("Scanning for missing or modified files in: {} (Max Depth: {})", target_dir, max_depth);
             
             for entry in WalkDir::new(&target_dir)
+                .max_depth(max_depth)
+                .follow_links(true) // Required for explicit mount points or custom user symlinks
                 .into_iter()
                 .filter_entry(|e| {
                     let fname = e.file_name().to_string_lossy();
@@ -294,8 +316,24 @@ impl IngestionPipeline {
             {
                 match entry {
                     Ok(e) => {
-                        if e.file_type().is_file() {
-                            entries.push(e);
+                        if e.file_type().is_file() || e.file_type().is_dir() {
+                            let path_str = e.path().to_string_lossy().to_string();
+                            
+                            let disk_mod = e.metadata()
+                                .ok()
+                                .and_then(|m| m.modified().ok().or_else(|| m.created().ok()))
+                                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                                .map(|d| d.as_nanos() as u64)
+                                .unwrap_or(0);
+
+                            let needs_index = match db_state.get(&path_str) {
+                                Some(&db_mod) => disk_mod > db_mod || db_mod == 0,
+                                None => true, // Missing from index!
+                            };
+
+                            if needs_index {
+                                missing_or_modified.push(e);
+                            }
                         }
                     },
                     Err(err) => {
@@ -306,8 +344,13 @@ impl IngestionPipeline {
                     }
                 }
             }
-            
-            entries.par_iter().for_each(|entry| {
+        }
+        
+        if missing_or_modified.is_empty() {
+            println!("[Indexer] Reconciliation complete. No missing files found from offline period.");
+        } else {
+            println!("[Indexer] Reconciliation found {} missing or modified files. Indexing now...", missing_or_modified.len());
+            missing_or_modified.par_iter().for_each(|entry| {
                 self.index_file(entry.path());
             });
         }

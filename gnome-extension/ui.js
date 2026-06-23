@@ -52,6 +52,11 @@ export const GnomeLensUI = GObject.registerClass({
             'changed::ui-color', this._applyStyles.bind(this),
             'changed::ui-transparency', this._applyStyles.bind(this),
             'changed::ui-shadow', this._applyStyles.bind(this),
+            'changed::show-document-text', () => {
+                if (this._resultsList && this._resultsList.hasResults()) {
+                    this._resultsList.renderResults([...this._resultsList.getResults()]);
+                }
+            },
             this
         );
         this._applyStyles();
@@ -157,7 +162,7 @@ export const GnomeLensUI = GObject.registerClass({
         });
         this._dialog.add_child(this._searchBar);
 
-        this._resultsList = new GnomeLensResultsList({
+        this._resultsList = new GnomeLensResultsList(this._settings, {
             onLaunch: (result, action) => this._launchResult(result, action)
         });
         this._dialog.add_child(this._resultsList);
@@ -383,7 +388,7 @@ export const GnomeLensUI = GObject.registerClass({
     _loadHistoryAt(index) {
         let history = this._settings.get_strv('search-history') || [];
         if (index >= 0 && index < history.length) {
-            this._searchBar.setQuery(history[index], true);
+            this._searchBar.setQuery(history[index], false);
         }
     }
 
@@ -391,16 +396,66 @@ export const GnomeLensUI = GObject.registerClass({
         this._extension.saveHistory(this._searchBar.getQuery());
         this.close(true);
 
+        // Chain of Responsibility: Isolated listener for delegation. 
+        // This persists even after the main UI dialog is destroyed.
+        let delegationCallback = {
+            onMessage: (data) => {
+                if (data.status === 'delegate') {
+                    console.log(`[Gnome Lens] [IPC Chain] Stage 3: Received delegation request from backend for ${data.action} -> ${data.path}`);
+                    try {
+                        let targetPath = data.path;
+                        if (data.action === 'open_folder') {
+                            let lastSlash = targetPath.lastIndexOf('/');
+                            targetPath = lastSlash > 0 ? targetPath.substring(0, lastSlash) : '/';
+                        }
+                        
+                        // Safety Trap: Prevent GNOME from throwing a hard Exception if the file was deleted post-index
+                        if (!GLib.file_test(targetPath, GLib.FileTest.EXISTS)) {
+                            console.warn(`[Gnome Lens] [IPC Chain] Abort: The file or directory no longer exists on disk: ${targetPath}`);
+                            return;
+                        }
+
+                        let file = Gio.File.new_for_path(targetPath);
+                        let uri = file.get_uri();
+                        
+                        console.log(`[Gnome Lens] [IPC Chain] Stage 4: Executing ultimate Wayland fallback via Gio.AppInfo for: ${uri}`);
+                        
+                        // EGO-Compliant Asynchronous Ultimate Fallback
+                        // Completely non-blocking to protect the Wayland compositor loop
+                        Gio.AppInfo.launch_default_for_uri_async(
+                            uri, 
+                            null, 
+                            null, 
+                            (appInfo, res) => {
+                                try {
+                                    Gio.AppInfo.launch_default_for_uri_finish(res);
+                                    console.log(`[Gnome Lens] [IPC Chain] Stage 5: GNOME fallback launch successful.`);
+                                } catch (e) {
+                                    console.warn(`[Gnome Lens] [IPC Chain] Error: Native async launch failed: ${e}`);
+                                }
+                            }
+                        );
+                    } catch (e) {
+                        console.warn(`[Gnome Lens] [IPC Chain] Error: Delegation to GNOME Shell failed: ${e}`);
+                    }
+                }
+            },
+            onError: (e) => console.warn(`[Gnome Lens] [IPC Chain] Launch IPC error: ${e}`),
+            onOffline: () => console.warn(`[Gnome Lens] [IPC Chain] Daemon offline during launch.`)
+        };
+
+        console.log(`[Gnome Lens] [IPC Chain] Stage 0: Dispatching launch request to Rust backend...`);
+
         if (result.plugin_id === 'plugin:app_launcher' && result.metadata && result.metadata.exec) {
-            this._service.sendPayload({ action: 'launch_app', exec: result.metadata.exec, filepath: result.filepath || '' });
+            this._service.sendPayload({ action: 'launch_app', exec: result.metadata.exec, filepath: result.filepath || '' }, delegationCallback);
             return;
         }
 
         if (result.filepath) {
             if (action === 'folder') {
-                this._service.sendPayload({ action: 'open_folder', path: result.filepath });
+                this._service.sendPayload({ action: 'open_folder', path: result.filepath }, delegationCallback);
             } else {
-                this._service.sendPayload({ action: 'open_file', path: result.filepath });
+                this._service.sendPayload({ action: 'open_file', path: result.filepath }, delegationCallback);
             }
         }
     }
@@ -410,8 +465,9 @@ export const GnomeLensUI = GObject.registerClass({
         this._searchBar.startPulse();
 
         let filterStrategy = this._settings.get_string('ai-filter-strategy');
+        let prioritizeFolders = this._settings.get_boolean('prioritize-folders');
 
-        this._service.search(query, filterStrategy, {
+        this._service.search(query, filterStrategy, prioritizeFolders, {
             onMessage: (data) => {
                 if (data.status === 'error') {
                     this._status.setStatus(data.message);

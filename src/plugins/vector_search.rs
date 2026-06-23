@@ -35,12 +35,14 @@ impl PluginTool for VectorSearchPlugin {
     }
     
     fn execute(&self, query: &SearchQuery) -> Vec<SearchResult> {
-        let mut model = self.ai_model.lock().unwrap();
-        
-        let target_vector = match model.embed(vec![query.raw_text.clone()], None) {
-            Ok(mut embs) => embs.pop().unwrap_or_default(),
-            Err(_) => return vec![],
-        };
+        // Scope the lock so it drops immediately after embedding, before hitting the database
+        let target_vector = {
+            let mut model = self.ai_model.lock().unwrap();
+            match model.embed(vec![query.raw_text.clone()], None) {
+                Ok(mut embs) => embs.pop().unwrap_or_default(),
+                Err(_) => return vec![],
+            }
+        }; 
 
         self.store.search(
             &target_vector,
@@ -48,7 +50,8 @@ impl PluginTool for VectorSearchPlugin {
             query.min_timestamp,
             query.max_timestamp,
             &query.metadata_filters,
-            self.id()
+            self.id(),
+            query.prioritize_folders
         )
     }
 }

@@ -2,12 +2,12 @@
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::sync::Mutex;
-use rayon::prelude::*;
 use crate::domain::SearchResult;
 use std::path::Path;
 
 pub struct VectorStore {
     conn: Mutex<Connection>,
+    db_path: String,
 }
 
 impl VectorStore {
@@ -126,11 +126,91 @@ impl VectorStore {
         }
         // --- END FTS MIGRATION ---
 
-        Self { conn: Mutex::new(conn) }
+        Self { 
+            conn: Mutex::new(conn),
+            db_path: db_path.to_string(),
+        }
+    }
+
+    /// Fetches live indexing statistics for the frontend UI.
+    pub fn get_db_stats(&self) -> (usize, u64) {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        
+        // 1. Get raw table record count
+        let count: usize = conn.query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0)).unwrap_or(0);
+        
+        // 2. Sum the exact physical sizes of the database, the WAL file, and SHM memory maps
+        let mut total_size = 0;
+        if let Ok(meta) = std::fs::metadata(&self.db_path) {
+            total_size += meta.len();
+        }
+        if let Ok(meta) = std::fs::metadata(format!("{}-wal", self.db_path)) {
+            total_size += meta.len();
+        }
+        if let Ok(meta) = std::fs::metadata(format!("{}-shm", self.db_path)) {
+            total_size += meta.len();
+        }
+
+        (count, total_size)
+    }
+
+    /// Forces a complete re-index of all files by resetting the internal modification timestamps
+    pub fn force_reindex_all(&self) {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        conn.execute("UPDATE documents SET modified_at = 0", []).ok();
+        println!("[Database] All modification timestamps reset to 0 to force full re-index.");
+    }
+
+    /// MARK-AND-SWEEP GARBAGE COLLECTION
+    /// Iterates through the entire database and purges any file IDs that no longer exist on disk.
+    /// This prevents vector bloat from files deleted while the daemon was offline.
+    pub fn prune_orphans(&self) {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        let mut ids = Vec::new();
+        if let Ok(mut stmt) = conn.prepare("SELECT id FROM documents") {
+            if let Ok(mut rows) = stmt.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    if let Ok(id) = row.get::<_, String>(0) {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+
+        let mut orphans = Vec::new();
+        for id in ids {
+            if !Path::new(&id).exists() {
+                orphans.push(id);
+            }
+        }
+
+        if !orphans.is_empty() {
+            conn.execute("BEGIN TRANSACTION", []).ok();
+            for orphan in &orphans {
+                conn.execute("DELETE FROM documents WHERE id = ?1", params![orphan]).ok();
+                conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![orphan]).ok();
+            }
+            conn.execute("COMMIT", []).ok();
+            
+            // Reclaim the physical disk space left behind by the deleted vectors
+            conn.execute("VACUUM", []).ok();
+            println!("[Database] Garbage Collection Complete: Purged {} orphaned files from the index.", orphans.len());
+        } else {
+            println!("[Database] Garbage Collection Complete: No orphaned files found.");
+        }
     }
 
     /// Dynamically extracts all unique metadata keys present across the user's entire data corpus.
-    /// This allows the LLM to know exactly what fields it can filter on without hardcoding logic.
     pub fn get_available_metadata_keys(&self) -> Vec<String> {
         let conn = match self.conn.lock() {
             Ok(guard) => guard,
@@ -139,12 +219,10 @@ impl VectorStore {
         
         let mut keys = Vec::new();
         
-        // Use SQLite's native JSON tree walking to extract all unique top-level keys
         if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT key FROM documents, json_each(metadata)") {
             if let Ok(mut rows) = stmt.query([]) {
                 while let Ok(Some(row)) = rows.next() {
                     if let Ok(key) = row.get::<_, String>(0) {
-                        // Filter out internal system keys that the LLM shouldn't try to query semantically
                         if key != "shallow_index" && key != "created_at" && key != "indexed_at" {
                             keys.push(key);
                         }
@@ -154,6 +232,27 @@ impl VectorStore {
         }
         
         keys
+    }
+
+    /// Instantly fetches the entire map of document IDs to modification timestamps
+    /// Allows the indexer to reconcile missing files without repeatedly locking the database.
+    pub fn get_all_document_timestamps(&self) -> HashMap<String, u64> {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        
+        let mut map = HashMap::new();
+        if let Ok(mut stmt) = conn.prepare("SELECT id, modified_at FROM documents") {
+            if let Ok(mut rows) = stmt.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    if let (Ok(id), Ok(ts)) = (row.get::<_, String>(0), row.get::<_, u64>(1)) {
+                        map.insert(id, ts);
+                    }
+                }
+            }
+        }
+        map
     }
 
     pub fn get_document_modified_at(&self, path: &str) -> Option<u64> {
@@ -247,7 +346,6 @@ impl VectorStore {
             return;
         }
 
-        // FIX: FTS5 does not allow filtering by unindexed columns in DELETE directly. Must subquery rowid.
         conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![&path]).ok();
         
         if let Err(e) = conn.execute(
@@ -270,13 +368,13 @@ impl VectorStore {
         let mut norm_b = 0.0;
         for (val_a, val_b) in a.iter().zip(b.iter()) {
             dot_product += val_a * val_b;
-            norm_a += val_a * val_b;
+            norm_a += val_a * val_a; 
             norm_b += val_b * val_b;
         }
         if norm_a == 0.0 || norm_b == 0.0 { 0.0 } else { dot_product / (norm_a.sqrt() * norm_b.sqrt()) }
     }
 
-    pub fn search(&self, target_embedding: &[f32], raw_query_text: &str, min_ts: Option<u64>, max_ts: Option<u64>, filters: &HashMap<String, String>, plugin_id: &str) -> Vec<SearchResult> {
+    pub fn search(&self, target_embedding: &[f32], raw_query_text: &str, min_ts: Option<u64>, max_ts: Option<u64>, filters: &HashMap<String, String>, plugin_id: &str, prioritize_folders: bool) -> Vec<SearchResult> {
         let conn = match self.conn.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -291,7 +389,6 @@ impl VectorStore {
             "que", "como", "por", "quien", "cuando", "el", "la", "los", "las", "y", "para", "con", "eso", "esto", "son", "tu", "desde", "hace", "era", "es", "un", "una", "de", "en", "documentos", "archivos", "fotos"
         ];
 
-        // 1. Lexical Extraction Phase: Detect explicit exact phrases bound by quotes
         let mut exact_phrases = Vec::new();
         let mut in_quotes = false;
         let mut current_phrase = String::new();
@@ -307,24 +404,21 @@ impl VectorStore {
             }
         }
         
-        // CTO FIX: Retain hyphens (-) and underscores (_) for UUIDs, server names, and API keys.
         let clean_query_text: String = raw_query_text.to_lowercase().chars()
             .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_')
             .collect();
 
-        // Build semantic OR matches
         let semantic_query = clean_query_text
             .split_whitespace()
             .filter(|w| w.len() > 2 && !stop_words.contains(w) && !exact_phrases.contains(&w.to_string()))
-            .map(|w| format!("\"{}\"", w))
+            .map(|w| format!("\"{}\"*", w)) 
             .collect::<Vec<_>>()
             .join(" OR ");
 
-        // Build final FTS query merging semantic ORs with mandatory exact ANDs
         let mut safe_query = semantic_query;
         if !exact_phrases.is_empty() {
             let exact_fts: String = exact_phrases.iter()
-                .map(|p| format!("\"{}\"", p.replace("\"", ""))) // Escape nested quotes just in case
+                .map(|p| format!("\"{}\"", p.replace("\"", ""))) 
                 .collect::<Vec<_>>()
                 .join(" AND ");
                 
@@ -354,7 +448,6 @@ impl VectorStore {
             }
         }
 
-        // 2. Fetch all candidates for Vector Scoring
         let mut sql = String::from("SELECT id, embedding, metadata FROM documents WHERE 1=1");
         
         if let Some(min) = min_ts { sql.push_str(&format!(" AND modified_at >= {}", min)); }
@@ -378,8 +471,7 @@ impl VectorStore {
             candidate_records.push(record);
         }
 
-        // 3. Score Vector Similarities
-        let mut vector_scores: Vec<_> = candidate_records.par_iter().map(|(id, embedding, _)| {
+        let mut vector_scores: Vec<_> = candidate_records.iter().map(|(id, embedding, _)| {
             (id.clone(), Self::fast_cosine_similarity(target_embedding, embedding))
         }).collect();
 
@@ -393,7 +485,6 @@ impl VectorStore {
         let contains_specifics = !exact_phrases.is_empty() || raw_query_text.split_whitespace()
             .any(|w| w.chars().any(|c| c.is_ascii_digit()));
 
-        // 4. Combine via Reciprocal Rank Fusion (RRF)
         let rrf_k = 60.0;
         
         let mut scored_candidates: Vec<_> = candidate_records.into_iter().map(|(id, _emb, metadata_json)| {
@@ -413,10 +504,45 @@ impl VectorStore {
 
             if contains_specifics {
                 if is_fts_match {
-                    // Heavily boost documents containing exact phrases or serial numbers
                     rrf_score *= 3.0; 
                 } else {
                     rrf_score *= 0.05; 
+                }
+            }
+
+            // --- FILENAME MATCH BOOSTING ---
+            // Fixes the issue where shallow files with a 0.0 vector score get buried
+            // under deep files, despite having an exact or partial filename match.
+            let parsed_filename = Path::new(&id).file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+            let q_lower = raw_query_text.to_lowercase().trim().to_string();
+            
+            let is_exact = parsed_filename == q_lower || parsed_filename.starts_with(&format!("{}.", q_lower));
+            
+            if is_exact {
+                rrf_score += 10.0_f32;
+            } else {
+                let terms: Vec<&str> = q_lower.split_whitespace().filter(|w| w.len() > 1).collect();
+                let mut all_match = !terms.is_empty();
+                let mut any_match = false;
+                
+                for term in &terms {
+                    if parsed_filename.contains(term) {
+                        any_match = true;
+                    } else {
+                        all_match = false;
+                    }
+                }
+                
+                if all_match {
+                    rrf_score += 3.0_f32;
+                } else if any_match {
+                    rrf_score += 0.5_f32;
+                }
+                
+                // Boost shallow files specifically if they have a partial/full filename match,
+                // as they lack vector score and might otherwise fall below the 0.005 threshold.
+                if (all_match || any_match) && metadata_json.contains(r#""shallow_index":"true""#) {
+                    rrf_score += 2.0_f32;
                 }
             }
 
@@ -427,10 +553,39 @@ impl VectorStore {
 
         scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         
-        scored_candidates.truncate(15); 
+        if prioritize_folders {
+            let mut folders = Vec::new();
+            let mut others = Vec::new();
+            
+            for cand in scored_candidates {
+                if cand.2.contains("\"filetype\":\"directory\"") {
+                    folders.push(cand);
+                } else {
+                    others.push(cand);
+                }
+            }
+            
+            folders.truncate(3); 
+            others.truncate(15 - folders.len()); 
+            
+            scored_candidates = folders;
+            scored_candidates.extend(others);
+            
+            scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            scored_candidates.truncate(15); 
+        }
 
         let mut results = Vec::new();
+        let mut ghosts_to_heal = Vec::new();
+
         for (id, score, metadata_json, is_fts_match, fts_snippet, _v_rank) in scored_candidates {
+            
+            if !Path::new(&id).exists() {
+                ghosts_to_heal.push(id.clone());
+                continue; 
+            }
+
             let parsed_filename = Path::new(&id).file_name().unwrap_or_default().to_string_lossy().to_string();
             let mut metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
             
@@ -465,6 +620,16 @@ impl VectorStore {
                 ai_matched: None,
                 ai_reasoning: None,
             });
+        }
+
+        if !ghosts_to_heal.is_empty() {
+            conn.execute("BEGIN TRANSACTION", []).ok();
+            for ghost in ghosts_to_heal {
+                conn.execute("DELETE FROM documents WHERE id = ?1", params![&ghost]).ok();
+                conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![&ghost]).ok();
+                println!("[Database] Read-Repair: Evicted ghost file from index: {}", ghost);
+            }
+            conn.execute("COMMIT", []).ok();
         }
 
         results

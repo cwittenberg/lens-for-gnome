@@ -48,8 +48,12 @@ export default class ServiceClient {
         });
     }
 
-    search(query, filterStrategy, callbacks) {
-        this.sendPayload({ query: query, filter_strategy: filterStrategy }, callbacks);
+    search(query, filterStrategy, prioritizeFolders, callbacks) {
+        this.sendPayload({ 
+            query: query, 
+            filter_strategy: filterStrategy,
+            prioritize_folders: prioritizeFolders
+        }, callbacks);
     }
 
     _readStream() {

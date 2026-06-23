@@ -10,10 +10,31 @@ export function buildLookAndFeelPage(settings, window) {
     });
 
     // ==========================================
-    // 1. RESULTS GROUP
+    // 1. SEARCH BAR GROUP
+    // ==========================================
+    const searchBarGroup = new Adw.PreferencesGroup({ title: 'Search Bar' });
+    
+    const selectTextRow = new Adw.SwitchRow({
+        title: 'Select Text on Open',
+        subtitle: 'Automatically select the previous search text when reopening the window.',
+    });
+    settings.bind('select-text-on-focus', selectTextRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+    searchBarGroup.add(selectTextRow);
+
+    page.add(searchBarGroup);
+
+    // ==========================================
+    // 2. RESULTS GROUP
     // ==========================================
     const resultsGroup = new Adw.PreferencesGroup({ title: 'Search Results' });
     
+    const prioritizeFoldersRow = new Adw.SwitchRow({
+        title: 'Prioritize Folder Results',
+        subtitle: 'Ensure that partial folder matches are always pushed to the top of the search list.',
+    });
+    settings.bind('prioritize-folders', prioritizeFoldersRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+    resultsGroup.add(prioritizeFoldersRow);
+
     const docTextRow = new Adw.SwitchRow({
         title: 'Show Document Text',
         subtitle: 'Display the indexed text snippets for document results by default.',
@@ -24,7 +45,7 @@ export function buildLookAndFeelPage(settings, window) {
     page.add(resultsGroup);
 
     // ==========================================
-    // 2. WINDOW APPEARANCE GROUP
+    // 3. WINDOW APPEARANCE GROUP
     // ==========================================
     const uiGroup = new Adw.PreferencesGroup({ title: 'Window Appearance' });
 
@@ -64,7 +85,7 @@ export function buildLookAndFeelPage(settings, window) {
     page.add(uiGroup);
 
     // ==========================================
-    // 3. ANIMATIONS GROUP
+    // 4. ANIMATIONS GROUP
     // ==========================================
     const animGroup = new Adw.PreferencesGroup({ title: 'Animations' });
     
