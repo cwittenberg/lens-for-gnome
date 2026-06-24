@@ -139,7 +139,8 @@ impl PluginTool for AppLauncherPlugin {
             }
         });
 
-        matches.into_iter().take(5).map(|app| {
+        // Uncapped mapping to allow all matches to flow to the UI results engine
+        matches.into_iter().map(|app| {
             let mut metadata = HashMap::new();
             metadata.insert("exec".to_string(), app.exec.clone());
             if let Some(ico) = &app.icon {

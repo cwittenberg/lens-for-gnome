@@ -12,7 +12,6 @@ pub struct VectorSearchPlugin {
 
 impl VectorSearchPlugin {
     pub fn new(store: Arc<VectorStore>) -> Self {
-        // Safe instantiation for #[non_exhaustive] struct
         let mut options = InitOptions::default();
         options.model_name = EmbeddingModel::ParaphraseMLMiniLML12V2;
 
@@ -31,17 +30,21 @@ impl PluginTool for VectorSearchPlugin {
     fn name(&self) -> &'static str { "Semantic File Search" }
     
     fn can_fast_handle(&self, _query: &SearchQuery) -> bool {
-        true // ALWAYS execute vector search to ensure files are grouped with apps
+        true 
     }
     
     fn execute(&self, query: &SearchQuery) -> Vec<SearchResult> {
-        // Scope the lock so it drops immediately after embedding, before hitting the database
-        let target_vector = {
+        // FAST PATH: If the query is less than 3 words, bypass AI semantic embedding 
+        // to grant instantaneous (<10ms) Spotlight-like performance for normal keyword searches.
+        let word_count = query.raw_text.split_whitespace().count();
+        let target_vector = if word_count >= 3 {
             let mut model = self.ai_model.lock().unwrap();
             match model.embed(vec![query.raw_text.clone()], None) {
-                Ok(mut embs) => embs.pop().unwrap_or_default(),
-                Err(_) => return vec![],
+                Ok(mut embs) => embs.pop().unwrap_or_else(|| vec![0.0; 384]),
+                Err(_) => vec![0.0; 384],
             }
+        } else {
+            vec![0.0; 384] 
         }; 
 
         self.store.search(
@@ -52,7 +55,8 @@ impl PluginTool for VectorSearchPlugin {
             &query.metadata_filters,
             query.directory_filter.as_ref(),
             self.id(),
-            query.prioritize_folders
+            // Folders are handled by Top Hits in JS now, we just pass the vector payload
+            false 
         )
     }
 }

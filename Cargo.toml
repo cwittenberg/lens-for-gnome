@@ -25,7 +25,7 @@ image = "0.24" # For image preprocessing and brightness analysis
 rqrr = "0.6" # Pure Rust QR code scanning
 ocrs = "0.3" # (Future) Pure Rust OCR engine
 fancy-regex = "0.13" # Used for complex lookarounds in smart extraction
-#regex = "1.12.4"
+md5 = "0.8.0"
 
 #script
 rhai = "1.19.0"

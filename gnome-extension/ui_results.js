@@ -123,25 +123,84 @@ class GnomeLensResultsList extends St.ScrollView {
         }
     }
 
-    _fetchThumbnailAsync(filepath, iconActor, fallbackIconName) {
+    _waitForThumbnail(targetPath, iconActor, isImagePreview, originalFile, cancellable) {
+        let targetFile = Gio.File.new_for_path(targetPath);
+        
+        let parent = targetFile.get_parent();
+        if (!parent.query_exists(null)) {
+            try { parent.make_directory_with_parents(null); } catch(e) {}
+        }
+
+        let monitor;
+        try {
+            monitor = targetFile.monitor_file(Gio.FileMonitorFlags.NONE, cancellable);
+        } catch (e) {
+            return;
+        }
+
+        let onMonitorEvent = () => {
+            if (cancellable && cancellable.is_cancelled()) {
+                monitor.cancel();
+                return;
+            }
+            if (targetFile.query_exists(null)) {
+                try {
+                    iconActor.set_gicon(new Gio.FileIcon({ file: targetFile }));
+                    iconActor.set_icon_size(32);
+                    iconActor.add_style_class_name('lens-result-preview');
+                    iconActor.remove_style_class_name('lens-result-icon');
+                } catch (e) {}
+                monitor.cancel();
+            }
+        };
+
+        monitor.connect('changed', onMonitorEvent);
+
+        if (cancellable) {
+            cancellable.connect(() => {
+                if (monitor && !monitor.is_cancelled()) monitor.cancel();
+            });
+        }
+        
+        if (isImagePreview) {
+            try {
+                iconActor.set_gicon(new Gio.FileIcon({ file: originalFile }));
+                iconActor.set_icon_size(32);
+                iconActor.add_style_class_name('lens-result-preview');
+                iconActor.remove_style_class_name('lens-result-icon');
+            } catch (e) {}
+        }
+    }
+
+    _fetchThumbnailAsync(filepath, iconActor, fallbackIconName, isImagePreview, cancellable) {
         let file = Gio.File.new_for_path(filepath);
         let uri = file.get_uri();
         let hash = GLib.compute_checksum_for_string(GLib.ChecksumType.MD5, uri, -1);
         
+        let cacheDir = GLib.get_user_cache_dir();
+        let largeThumbPath = GLib.build_filenamev([cacheDir, 'thumbnails', 'large', hash + '.png']);
+        
         let paths = [
-            GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'normal', hash + '.png']),
-            GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'large', hash + '.png']),
-            GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'x-large', hash + '.png']),
-            GLib.build_filenamev([GLib.get_user_cache_dir(), 'thumbnails', 'xx-large', hash + '.png'])
+            GLib.build_filenamev([cacheDir, 'thumbnails', 'normal', hash + '.png']),
+            largeThumbPath,
+            GLib.build_filenamev([cacheDir, 'thumbnails', 'x-large', hash + '.png']),
+            GLib.build_filenamev([cacheDir, 'thumbnails', 'xx-large', hash + '.png'])
         ];
 
         let checkNext = (index) => {
-            if (index >= paths.length) return;
+            if (cancellable && cancellable.is_cancelled()) return;
+            
+            if (index >= paths.length) {
+                this._waitForThumbnail(largeThumbPath, iconActor, isImagePreview, file, cancellable);
+                return;
+            }
             
             let thumbFile = Gio.File.new_for_path(paths[index]);
-            thumbFile.query_info_async(Gio.FILE_ATTRIBUTE_STANDARD_TYPE, Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null, (f, res) => {
+            thumbFile.query_info_async(Gio.FILE_ATTRIBUTE_STANDARD_TYPE, Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, cancellable, (f, res) => {
                 try {
                     f.query_info_finish(res);
+                    if (cancellable && cancellable.is_cancelled()) return;
+                    
                     iconActor.set_gicon(new Gio.FileIcon({ file: thumbFile }));
                     iconActor.set_icon_size(32);
                     iconActor.add_style_class_name('lens-result-preview');
@@ -151,6 +210,7 @@ class GnomeLensResultsList extends St.ScrollView {
                 }
             });
         };
+
         checkNext(0);
     }
 
@@ -197,42 +257,76 @@ class GnomeLensResultsList extends St.ScrollView {
             return true;
         });
 
-        // Advanced Grouping and Sorting Pipeline
-        this._results = [...filteredArray].sort((a, b) => {
-            let aMatch = a.ai_matched !== false;
-            let bMatch = b.ai_matched !== false;
+        // Phase 1: Pure score sort to find absolute best matches regardless of bucket
+        let scoreSorted = [...filteredArray].sort((a, b) => {
+            let aMatch = a.ai_matched === true;
+            let bMatch = b.ai_matched === true;
             if (aMatch !== bMatch) return aMatch ? -1 : 1;
-
-            let groupA = getGroup(a);
-            let groupB = getGroup(b);
-            
-            if (groupA !== groupB) return groupA - groupB;
-            
-            return b.score - a.score;
+            return (b.score || 0) - (a.score || 0);
         });
 
-        let maxRender = Math.min(this._results.length, 30);
-        let currentGroup = -1;
+        let bestMatches = [];
+        let rest = [];
+
+        if (activeFilter === 'All' && scoreSorted.length > 0) {
+            // Take up to 5 best matches to prevent folders from burying exact hits
+            let maxBest = Math.min(5, scoreSorted.length);
+            bestMatches = scoreSorted.slice(0, maxBest);
+            rest = scoreSorted.slice(maxBest);
+            
+            // Re-sort the rest into their categorical group buckets
+            rest.sort((a, b) => {
+                let aMatch = a.ai_matched === true;
+                let bMatch = b.ai_matched === true;
+                if (aMatch !== bMatch) return aMatch ? -1 : 1;
+
+                let groupA = getGroup(a);
+                let groupB = getGroup(b);
+                if (groupA !== groupB) return groupA - groupB;
+                
+                return (b.score || 0) - (a.score || 0);
+            });
+        } else {
+            rest = scoreSorted;
+            rest.sort((a, b) => {
+                let aMatch = a.ai_matched === true;
+                let bMatch = b.ai_matched === true;
+                if (aMatch !== bMatch) return aMatch ? -1 : 1;
+
+                let groupA = getGroup(a);
+                let groupB = getGroup(b);
+                if (groupA !== groupB) return groupA - groupB;
+                
+                return (b.score || 0) - (a.score || 0);
+            });
+        }
+
+        this._results = [...bestMatches, ...rest];
+
+        let maxRender = this._results.length;
+        let currentGroup = -2; // distinct from any valid group (-1 to 4)
         let groupNames = ["Folders", "Applications & Tools", "Emails", "Indexed Documents", "Other Files"];
 
         for (let i = 0; i < maxRender; i++) {
             let res = this._results[i];
-            
             let ext = getExt(res);
             let isFolder = isFolderResult(res);
             let group = getGroup(res);
             let isEmail = res.plugin_id === 'plugin:email' || ext === 'eml';
             
-            if (group !== currentGroup) {
+            // Map best matches to a virtual group -1 (Top Hits)
+            let displayGroup = (i < bestMatches.length) ? -1 : group;
+            
+            if (displayGroup !== currentGroup) {
+                let headerText = displayGroup === -1 ? "Top Hits" : (groupNames[group] || "Other");
                 let header = new St.Label({
-                    text: groupNames[group],
+                    text: headerText,
                     style_class: 'lens-result-group-header'
                 });
                 this._resultsBox.add_child(header);
-                currentGroup = group;
+                currentGroup = displayGroup;
             }
 
-            // Using pure St.BoxLayout with button-press-event ignores ScrollView capture delays and fires instantly
             let itemBox = new St.BoxLayout({
                 style_class: 'lens-result-item',
                 vertical: false,
@@ -242,6 +336,13 @@ class GnomeLensResultsList extends St.ScrollView {
             if (res.ai_matched === false) {
                 itemBox.add_style_class_name('irrelevant');
             }
+            
+            let cancellable = new Gio.Cancellable();
+            itemBox.connect('destroy', () => {
+                if (!cancellable.is_cancelled()) {
+                    cancellable.cancel();
+                }
+            });
 
             itemBox.connectObject('button-press-event', () => {
                 if (this.callbacks.onLaunch) this.callbacks.onLaunch(res);
@@ -320,8 +421,9 @@ class GnomeLensResultsList extends St.ScrollView {
             }
 
             if ((isImagePreview || isVideoPreview || isPdfPreview) && res.filepath) {
-                this._fetchThumbnailAsync(res.filepath, iconActor, iconName);
+                this._fetchThumbnailAsync(res.filepath, iconActor, iconName, isImagePreview, cancellable);
             }
+
             itemBox.add_child(iconActor);
 
             let textBox = new St.BoxLayout({
@@ -389,7 +491,7 @@ class GnomeLensResultsList extends St.ScrollView {
             }
 
             if (res.ai_reasoning) {
-                let reasoningPrefix = res.ai_matched ? '✨ ' : '❌ ';
+                let reasoningPrefix = res.ai_matched ? '↳ ' : '✗ ';
                 let reasoningLabel = new St.Label({
                     text: reasoningPrefix + res.ai_reasoning,
                     style_class: 'lens-result-ai-reasoning',
@@ -429,9 +531,9 @@ class GnomeLensResultsList extends St.ScrollView {
                     let dateStr = res.metadata.date;
                     if (!isNaN(d.getTime())) {
                         let now = new Date();
-                        let isToday = d.getDate() === now.getDate() && 
-                                      d.getMonth() === now.getMonth() && 
-                                      d.getFullYear() === now.getFullYear();
+                        let isToday = d.getDate() === now.getDate() &&
+                                       d.getMonth() === now.getMonth() &&
+                                       d.getFullYear() === now.getFullYear();
                         if (isToday) {
                             dateStr = d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                         } else {
@@ -473,14 +575,7 @@ class GnomeLensResultsList extends St.ScrollView {
                 }
                 
                 let file = Gio.File.new_for_path(expandedPath);
-                let cancellable = new Gio.Cancellable();
                 
-                itemBox.connect('destroy', () => {
-                    if (!cancellable.is_cancelled()) {
-                        cancellable.cancel();
-                    }
-                });
-
                 if (isFolder) {
                     file.enumerate_children_async(
                         'standard::name',
@@ -553,7 +648,7 @@ class GnomeLensResultsList extends St.ScrollView {
                     if (this.callbacks.onLaunch) this.callbacks.onLaunch(res, 'folder');
                     return Clutter.EVENT_STOP;
                 };
-
+                
                 openFolderBtn.connectObject('button-press-event', handleFolderClick, this);
                 
                 actionBox.add_child(openFolderBtn);

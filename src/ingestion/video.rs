@@ -1,5 +1,6 @@
 // src/ingestion/video.rs
 use std::path::Path;
+use std::fs;
 use std::process::Command;
 use super::FileExtractor;
 
@@ -11,12 +12,71 @@ impl VideoExtractor {
     }
 }
 
+fn generate_freedesktop_uri(path: &Path) -> String {
+    let mut uri = String::from("file://");
+    let path_str = path.to_string_lossy();
+    for b in path_str.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                uri.push(b as char);
+            }
+            _ => {
+                uri.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    uri
+}
+
+fn generate_video_thumbnail(path: &Path) {
+    if let Some(home) = std::env::var_os("HOME") {
+        let large_dir = Path::new(&home).join(".cache/thumbnails/large");
+        let uri = generate_freedesktop_uri(path);
+        let hash = format!("{:x}", md5::compute(uri.as_bytes()));
+        let thumb_path = large_dir.join(format!("{}.png", hash));
+        
+        if thumb_path.exists() {
+            return;
+        }
+
+        let _ = fs::create_dir_all(&large_dir);
+        let temp_path = large_dir.join(format!("{}.tmp.png", hash));
+        let path_str = path.to_string_lossy().to_string();
+        
+        // Spawn FFMPEG to seek to 0.5s and extract a 256x256 thumbnail frame
+        let status = Command::new("ffmpeg")
+            .args(&[
+                "-y", 
+                "-i", &path_str, 
+                "-ss", "00:00:00.500", 
+                "-vframes", "1", 
+                "-vf", "thumbnail,scale=256:256:force_original_aspect_ratio=decrease", 
+                temp_path.to_str().unwrap()
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        if let Ok(st) = status {
+            if st.success() {
+                let _ = fs::rename(&temp_path, &thumb_path);
+            } else {
+                let _ = fs::remove_file(&temp_path);
+            }
+        }
+    }
+}
+
 impl FileExtractor for VideoExtractor {
     fn can_handle(&self, extension: &str) -> bool {
         matches!(extension, "mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" | "wmv" | "m4v")
     }
 
     fn extract(&self, path: &Path) -> Result<String, String> {
+        // Fire-and-forget thumbnail frame extraction into the OS Cache
+        generate_video_thumbnail(path);
+
         let path_str = path.to_string_lossy().to_string();
         let mut extracted_content = String::new();
 
