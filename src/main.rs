@@ -35,7 +35,7 @@ fn build_gsettings_cmd() -> Command {
         cmd.env("GSETTINGS_SCHEMA_DIR", "schemas");
     } else if let Ok(home) = env::var("HOME") {
         // Fallback for user-local installations
-        let ext_schema = format!("{}/.local/share/gnome-shell/extensions/gnome-lens/schemas", home);
+        let ext_schema = format!("{}/.local/share/gnome-shell/extensions/gnome-lens@cwittenberg/schemas", home);
         if Path::new(&ext_schema).exists() {
             cmd.env("GSETTINGS_SCHEMA_DIR", ext_schema);
         }

@@ -142,7 +142,7 @@ impl LlmStrategy for SynthesisStrategy {
             "answer": answer,
             "reasoning": final_reasoning,
             "confidence_score": 100,
-            "confidence_justification": "Derived strictly from local RAG context.",
+            "confidence_justification": "Derived from indexed content.",
             "cited_indices": sorted_indices
         })
     }

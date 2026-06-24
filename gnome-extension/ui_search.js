@@ -28,7 +28,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
         this._entry = new St.Entry({
             style_class: 'lens-entry',
-            hint_text: 'Search files, ask the AI...',
+            hint_text: 'Search...',
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
             can_focus: true,
@@ -37,6 +37,30 @@ class GnomeLensSearchBar extends St.BoxLayout {
         this._entry.clutter_text.connectObject('text-changed', this._onTextChanged.bind(this), this);
         this._entry.clutter_text.connectObject('key-press-event', this._onKeyPress.bind(this), this);
         this.add_child(this._entry);
+
+        this._clearButton = new St.Button({
+            style_class: 'lens-clear-button',
+            child: new St.Icon({ icon_name: 'edit-clear-symbolic', icon_size: 20 }),
+            y_align: Clutter.ActorAlign.CENTER,
+            reactive: true,
+            can_focus: true,
+            visible: false,
+        });
+
+        this._clearButton.connectObject('button-press-event', () => {
+            this.setQuery('');
+            if (this.callbacks.onClear) this.callbacks.onClear();
+            this.grabFocus();
+            return Clutter.EVENT_STOP;
+        }, this);
+        
+        this._clearButton.connectObject('clicked', () => {
+            this.setQuery('');
+            if (this.callbacks.onClear) this.callbacks.onClear();
+            this.grabFocus();
+        }, this);
+
+        this.add_child(this._clearButton);
 
         this._countLabel = new St.Label({
             style_class: 'lens-count-label',
@@ -68,6 +92,8 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
     _onTextChanged() {
         let text = this._entry.get_text();
+
+        this._clearButton.visible = text.length > 0;
 
         if (this._debounceId > 0) {
             GLib.source_remove(this._debounceId);
