@@ -1,13 +1,23 @@
 // src/vector/mod.rs
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, RwLock};
 use crate::domain::SearchResult;
 use std::path::Path;
+use rayon::prelude::*;
+
+#[derive(Clone)]
+pub struct CachedDoc {
+    pub id: String,
+    pub modified_at: u64,
+    pub metadata: HashMap<String, String>,
+    pub embedding: Vec<f32>,
+}
 
 pub struct VectorStore {
     conn: Mutex<Connection>,
     db_path: String,
+    cache: Arc<RwLock<HashMap<String, CachedDoc>>>,
 }
 
 impl VectorStore {
@@ -120,19 +130,40 @@ impl VectorStore {
             conn.execute("UPDATE documents SET modified_at = 0", []).ok();
         }
 
+        println!("[Database] Loading embeddings and metadata into RAM for instant search...");
+        let mut cache = HashMap::new();
+        if let Ok(mut stmt) = conn.prepare("SELECT id, modified_at, metadata, embedding FROM documents") {
+            if let Ok(mut rows) = stmt.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    let id: String = row.get(0).unwrap_or_default();
+                    let modified_at: u64 = row.get(1).unwrap_or(0);
+                    let metadata_json: String = row.get(2).unwrap_or_else(|_| "{}".to_string());
+                    let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
+                    
+                    let mut embedding = Vec::new();
+                    if let Ok(blob_ref) = row.get_ref(3) {
+                        if let Ok(bytes) = blob_ref.as_blob() {
+                            embedding.reserve_exact(bytes.len() / 4);
+                            for chunk in bytes.chunks_exact(4) {
+                                embedding.push(f32::from_ne_bytes(chunk.try_into().unwrap_or([0; 4])));
+                            }
+                        }
+                    }
+                    cache.insert(id.clone(), CachedDoc { id, modified_at, metadata, embedding });
+                }
+            }
+        }
+        println!("[Database] Successfully cached {} documents in RAM.", cache.len());
+
         Self { 
             conn: Mutex::new(conn),
             db_path: db_path.to_string(),
+            cache: Arc::new(RwLock::new(cache)),
         }
     }
 
     pub fn get_db_stats(&self) -> (usize, u64) {
-        let conn = match self.conn.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        
-        let count: usize = conn.query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0)).unwrap_or(0);
+        let count = self.cache.read().unwrap().len();
         
         let mut total_size = 0;
         if let Ok(meta) = std::fs::metadata(&self.db_path) {
@@ -154,22 +185,19 @@ impl VectorStore {
             Err(poisoned) => poisoned.into_inner(),
         };
         conn.execute("UPDATE documents SET modified_at = 0", []).ok();
+        
+        let mut cache_guard = self.cache.write().unwrap();
+        for doc in cache_guard.values_mut() {
+            doc.modified_at = 0;
+        }
     }
 
     pub fn prune_orphans(&self) {
-        let conn = match self.conn.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-
         let mut ids = Vec::new();
-        if let Ok(mut stmt) = conn.prepare("SELECT id FROM documents") {
-            if let Ok(mut rows) = stmt.query([]) {
-                while let Ok(Some(row)) = rows.next() {
-                    if let Ok(id) = row.get::<_, String>(0) {
-                        ids.push(id);
-                    }
-                }
+        {
+            let cache_guard = self.cache.read().unwrap();
+            for id in cache_guard.keys() {
+                ids.push(id.clone());
             }
         }
 
@@ -181,6 +209,10 @@ impl VectorStore {
         }
 
         if !orphans.is_empty() {
+            let conn = match self.conn.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             conn.execute("BEGIN TRANSACTION", []).ok();
             for orphan in &orphans {
                 conn.execute("DELETE FROM documents WHERE id = ?1", params![orphan]).ok();
@@ -189,63 +221,37 @@ impl VectorStore {
             conn.execute("COMMIT", []).ok();
             
             conn.execute("VACUUM", []).ok();
+            
+            let mut cache_guard = self.cache.write().unwrap();
+            for orphan in &orphans {
+                cache_guard.remove(orphan);
+            }
         }
     }
 
     pub fn get_available_metadata_keys(&self) -> Vec<String> {
-        let conn = match self.conn.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let cache_guard = self.cache.read().unwrap();
+        let mut keys = std::collections::HashSet::new();
         
-        let mut keys = Vec::new();
-        
-        if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT key FROM documents, json_each(metadata)") {
-            if let Ok(mut rows) = stmt.query([]) {
-                while let Ok(Some(row)) = rows.next() {
-                    if let Ok(key) = row.get::<_, String>(0) {
-                        if key != "shallow_index" && key != "created_at" && key != "indexed_at" {
-                            keys.push(key);
-                        }
-                    }
+        for doc in cache_guard.values() {
+            for key in doc.metadata.keys() {
+                if key != "shallow_index" && key != "created_at" && key != "indexed_at" {
+                    keys.insert(key.clone());
                 }
             }
         }
         
-        keys
+        keys.into_iter().collect()
     }
 
     pub fn get_all_document_timestamps(&self) -> HashMap<String, u64> {
-        let conn = match self.conn.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        
-        let mut map = HashMap::new();
-        if let Ok(mut stmt) = conn.prepare("SELECT id, modified_at FROM documents") {
-            if let Ok(mut rows) = stmt.query([]) {
-                while let Ok(Some(row)) = rows.next() {
-                    if let (Ok(id), Ok(ts)) = (row.get::<_, String>(0), row.get::<_, u64>(1)) {
-                        map.insert(id, ts);
-                    }
-                }
-            }
-        }
-        map
+        let cache_guard = self.cache.read().unwrap();
+        cache_guard.values().map(|doc| (doc.id.clone(), doc.modified_at)).collect()
     }
 
     pub fn get_document_modified_at(&self, path: &str) -> Option<u64> {
-        let conn = match self.conn.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let mut stmt = conn.prepare("SELECT modified_at FROM documents WHERE id = ?1").ok()?;
-        let mut rows = stmt.query(params![path]).ok()?;
-        if let Ok(Some(row)) = rows.next() {
-            row.get(0).ok()
-        } else {
-            None
-        }
+        let cache_guard = self.cache.read().unwrap();
+        cache_guard.get(path).map(|doc| doc.modified_at)
     }
 
     pub fn delete_document(&self, path: &str) {
@@ -257,6 +263,9 @@ impl VectorStore {
         conn.execute("DELETE FROM documents WHERE id = ?1", params![path]).ok();
         conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![path]).ok();
         conn.execute("COMMIT", []).ok();
+
+        let mut cache_guard = self.cache.write().unwrap();
+        cache_guard.remove(path);
     }
 
     fn f32_to_bytes(vec: &[f32]) -> Vec<u8> {
@@ -306,6 +315,14 @@ impl VectorStore {
         }
 
         conn.execute("COMMIT", []).ok();
+
+        let mut cache_guard = self.cache.write().unwrap();
+        cache_guard.insert(path.clone(), CachedDoc {
+            id: path,
+            modified_at,
+            metadata,
+            embedding,
+        });
     }
 
     pub fn search(
@@ -319,11 +336,6 @@ impl VectorStore {
         plugin_id: &str,
         prioritize_folders: bool
     ) -> Vec<SearchResult> {
-        let conn = match self.conn.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        
         let mut fts_matches = HashMap::new();
         
         let stop_words = [
@@ -376,6 +388,10 @@ impl VectorStore {
         }
             
         if !safe_query.is_empty() {
+            let conn = match self.conn.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             if let Ok(mut fts_stmt) = conn.prepare(
                 "SELECT id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip 
                  FROM documents_fts 
@@ -392,76 +408,57 @@ impl VectorStore {
                     }
                 }
             }
+            drop(conn); // Explicitly drop to avoid drop order issues in tail expressions
         }
 
         let is_dummy_vector = target_embedding.is_empty() || target_embedding.iter().all(|&v| v == 0.0);
-        let mut candidate_scores = Vec::new();
+        let norm_a: f32 = if !is_dummy_vector {
+            target_embedding.iter().map(|v| v * v).sum::<f32>().sqrt().max(0.0001)
+        } else {
+            1.0
+        };
 
-        if is_dummy_vector {
-            for (id, (rank, _)) in &fts_matches {
-                let mut sql = String::from("SELECT json_extract(metadata, '$.shallow_index'), json_extract(metadata, '$.filetype') FROM documents WHERE id = ?1");
-                if let Some(min) = min_ts { sql.push_str(&format!(" AND modified_at >= {}", min)); }
-                if let Some(max) = max_ts { sql.push_str(&format!(" AND modified_at <= {}", max)); }
+        let cache_guard = self.cache.read().unwrap();
+
+        let mut candidate_scores: Vec<(String, f32, Option<String>, Option<String>)> = cache_guard.par_iter()
+            .filter(|(_, doc)| {
+                if is_dummy_vector && !fts_matches.contains_key(&doc.id) {
+                    return false;
+                }
+                if let Some(min) = min_ts { if doc.modified_at < min { return false; } }
+                if let Some(max) = max_ts { if doc.modified_at > max { return false; } }
                 if let Some(dir) = directory_filter {
-                    let safe_dir = dir.replace("'", "''");
-                    sql.push_str(&format!(" AND id LIKE '{}%'", safe_dir));
+                    if !doc.id.starts_with(dir) { return false; }
                 }
                 for (key, val) in filters {
-                    let safe_val = val.replace("'", "''");
-                    sql.push_str(&format!(" AND json_extract(metadata, '$.{}') = '{}'", key, safe_val));
+                    if doc.metadata.get(key) != Some(val) {
+                        return false;
+                    }
                 }
+                true
+            })
+            .map(|(_, doc)| {
+                let v_score = if is_dummy_vector {
+                    let rank = fts_matches.get(&doc.id).unwrap().0;
+                    1.0 / (rank as f32)
+                } else {
+                    let mut dot_product = 0.0;
+                    let mut norm_b = 0.0;
+                    for (i, &val_b) in doc.embedding.iter().enumerate() {
+                        if i >= target_embedding.len() { break; }
+                        let val_a = target_embedding[i];
+                        dot_product += val_a * val_b;
+                        norm_b += val_b * val_b;
+                    }
+                    if norm_b == 0.0 { 0.0 } else { dot_product / (norm_a * norm_b.sqrt()) }
+                };
                 
-                if let Ok(mut check_stmt) = conn.prepare(&sql) {
-                    if let Ok(row) = check_stmt.query_row(params![id], |r| {
-                        let s: Option<String> = r.get(0).unwrap_or(None);
-                        let f: Option<String> = r.get(1).unwrap_or(None);
-                        Ok((s, f))
-                    }) {
-                        let base_score = 1.0 / (*rank as f32);
-                        candidate_scores.push((id.clone(), base_score, row.0, row.1));
-                    }
-                }
-            }
-        } else {
-            let mut sql = String::from("SELECT id, embedding, json_extract(metadata, '$.shallow_index'), json_extract(metadata, '$.filetype') FROM documents WHERE 1=1");
-            if let Some(min) = min_ts { sql.push_str(&format!(" AND modified_at >= {}", min)); }
-            if let Some(max) = max_ts { sql.push_str(&format!(" AND modified_at <= {}", max)); }
-            if let Some(dir) = directory_filter {
-                let safe_dir = dir.replace("'", "''");
-                sql.push_str(&format!(" AND id LIKE '{}%'", safe_dir));
-            }
-            for (key, val) in filters {
-                let safe_val = val.replace("'", "''");
-                sql.push_str(&format!(" AND json_extract(metadata, '$.{}') = '{}'", key, safe_val));
-            }
-
-            if let Ok(mut stmt) = conn.prepare(&sql) {
-                let norm_a: f32 = target_embedding.iter().map(|v| v * v).sum::<f32>().sqrt().max(0.0001);
-                if let Ok(mut rows) = stmt.query([]) {
-                    while let Ok(Some(row)) = rows.next() {
-                        let id: String = row.get(0).unwrap_or_default();
-                        let v_score = if let Ok(blob_ref) = row.get_ref(1) {
-                            if let Ok(bytes) = blob_ref.as_blob() {
-                                let mut dot_product = 0.0;
-                                let mut norm_b = 0.0;
-                                for (i, chunk) in bytes.chunks_exact(4).enumerate() {
-                                    if i >= target_embedding.len() { break; }
-                                    let val_b = f32::from_ne_bytes(chunk.try_into().unwrap_or([0; 4]));
-                                    let val_a = target_embedding[i];
-                                    dot_product += val_a * val_b;
-                                    norm_b += val_b * val_b;
-                                }
-                                if norm_b == 0.0 { 0.0 } else { dot_product / (norm_a * norm_b.sqrt()) }
-                            } else { 0.0 }
-                        } else { 0.0 };
-                        
-                        let is_shallow_opt: Option<String> = row.get(2).unwrap_or(None);
-                        let filetype_opt: Option<String> = row.get(3).unwrap_or(None);
-                        candidate_scores.push((id, v_score, is_shallow_opt, filetype_opt));
-                    }
-                }
-            }
-        }
+                let is_shallow = doc.metadata.get("shallow_index").cloned();
+                let filetype = doc.metadata.get("filetype").cloned();
+                
+                (doc.id.clone(), v_score, is_shallow, filetype)
+            })
+            .collect();
 
         candidate_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         
@@ -557,87 +554,118 @@ impl VectorStore {
         let mut results = Vec::new();
         let mut ghosts_to_heal = Vec::new();
 
-        if let Ok(mut meta_stmt) = conn.prepare("SELECT metadata FROM documents WHERE id = ?1") {
-            if let Ok(mut text_stmt) = conn.prepare("SELECT content_text FROM documents_fts WHERE id = ?1") {
-                for (id, score, _filetype, is_fts_match, fts_snippet, _v_rank) in scored_candidates {
-                    if !Path::new(&id).exists() {
-                        ghosts_to_heal.push(id.clone());
-                        continue; 
+        let mut full_texts = HashMap::new();
+        if !scored_candidates.is_empty() {
+            let conn = match self.conn.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let id_list = scored_candidates.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!("SELECT id, content_text FROM documents_fts WHERE id IN ({})", id_list);
+            
+            if let Ok(mut text_stmt) = conn.prepare(&sql) {
+                let params_vec: Vec<&dyn rusqlite::ToSql> = scored_candidates.iter().map(|(id, ..)| id as &dyn rusqlite::ToSql).collect();
+                if let Ok(mut rows) = text_stmt.query(rusqlite::params_from_iter(params_vec)) {
+                    while let Ok(Some(row)) = rows.next() {
+                        let id: String = row.get(0).unwrap_or_default();
+                        let text: String = row.get(1).unwrap_or_default();
+                        full_texts.insert(id, text);
                     }
-
-                    let parsed_filename = Path::new(&id).file_name().unwrap_or_default().to_string_lossy().to_string();
-                    let metadata_json: String = meta_stmt.query_row(params![&id], |row| row.get(0)).unwrap_or_else(|_| "{}".to_string());
-                    let mut metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
-                    let full_text: String = text_stmt.query_row(params![&id], |row| row.get(0)).unwrap_or_default();
-
-                    let is_eml = metadata.get("filetype").map(|s| s.as_str()) == Some("eml") || parsed_filename.ends_with(".eml");
-                    if is_eml {
-                        for line in full_text.lines().take(50) {
-                            let lower = line.to_lowercase();
-                            if lower.starts_with("subject: ") && !metadata.contains_key("subject") {
-                                metadata.insert("subject".to_string(), line[9..].trim().to_string());
-                            } else if lower.starts_with("from: ") && !metadata.contains_key("from") {
-                                let mut from_val = line[6..].trim().to_string();
-                                if let Some(idx) = from_val.find('<') {
-                                    let name = from_val[..idx].trim();
-                                    if !name.is_empty() {
-                                        from_val = name.replace("\"", "");
-                                    }
-                                }
-                                metadata.insert("from".to_string(), from_val);
-                            } else if lower.starts_with("date: ") && !metadata.contains_key("date") {
-                                metadata.insert("date".to_string(), line[6..].trim().to_string());
-                            } else if lower.starts_with("message-id: ") && !metadata.contains_key("message_id") {
-                                metadata.insert("message_id".to_string(), line[12..].trim().to_string());
-                            }
-                        }
-                        
-                        if let Some(msg_id) = metadata.get("message_id").cloned() {
-                            let clean_id = msg_id.trim_matches(|c| c == '<' || c == '>');
-                            let encoded_id = clean_id.replace("@", "%40").replace("+", "%2B");
-                            metadata.insert("gmail_url".to_string(), format!("https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{}", encoded_id));
-                        }
-                    }
-
-                    let created_at = metadata.remove("created_at").and_then(|v| v.parse::<u64>().ok());
-                    let indexed_at = metadata.remove("indexed_at").and_then(|v| v.parse::<u64>().ok());
-
-                    let final_snippet = if is_fts_match {
-                        fts_snippet
-                    } else {
-                        if full_text.is_empty() {
-                            "Content snippet unavailable.".to_string()
-                        } else {
-                            full_text.chars().take(200).collect::<String>()
-                        }
-                    };
-
-                    results.push(SearchResult {
-                        id: id.clone(),
-                        title: parsed_filename.clone(),
-                        snippet: final_snippet,
-                        plugin_id: plugin_id.to_string(),
-                        score,
-                        filename: Some(parsed_filename),
-                        filepath: Some(id),
-                        metadata,
-                        created_at,
-                        indexed_at,
-                        full_context: Some(full_text.chars().take(2500).collect::<String>()),
-                        ai_matched: None,
-                        ai_reasoning: None,
-                    });
                 }
             }
+            drop(conn); // Explicitly drop to avoid drop order issues in tail expressions
         }
 
+        for (id, score, _filetype, is_fts_match, fts_snippet, _v_rank) in scored_candidates {
+            if !Path::new(&id).exists() {
+                ghosts_to_heal.push(id.clone());
+                continue; 
+            }
+
+            let parsed_filename = Path::new(&id).file_name().unwrap_or_default().to_string_lossy().to_string();
+            let mut metadata: HashMap<String, String> = cache_guard.get(&id)
+                .map(|doc| doc.metadata.clone())
+                .unwrap_or_default();
+
+            let full_text = full_texts.remove(&id).unwrap_or_default();
+
+            let is_eml = metadata.get("filetype").map(|s| s.as_str()) == Some("eml") || parsed_filename.ends_with(".eml");
+            if is_eml {
+                for line in full_text.lines().take(50) {
+                    let lower = line.to_lowercase();
+                    if lower.starts_with("subject: ") && !metadata.contains_key("subject") {
+                        metadata.insert("subject".to_string(), line[9..].trim().to_string());
+                    } else if lower.starts_with("from: ") && !metadata.contains_key("from") {
+                        let mut from_val = line[6..].trim().to_string();
+                        if let Some(idx) = from_val.find('<') {
+                            let name = from_val[..idx].trim();
+                            if !name.is_empty() {
+                                from_val = name.replace("\"", "");
+                            }
+                        }
+                        metadata.insert("from".to_string(), from_val);
+                    } else if lower.starts_with("date: ") && !metadata.contains_key("date") {
+                        metadata.insert("date".to_string(), line[6..].trim().to_string());
+                    } else if lower.starts_with("message-id: ") && !metadata.contains_key("message_id") {
+                        metadata.insert("message_id".to_string(), line[12..].trim().to_string());
+                    }
+                }
+                
+                if let Some(msg_id) = metadata.get("message_id").cloned() {
+                    let clean_id = msg_id.trim_matches(|c| c == '<' || c == '>');
+                    let encoded_id = clean_id.replace("@", "%40").replace("+", "%2B");
+                    metadata.insert("gmail_url".to_string(), format!("https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{}", encoded_id));
+                }
+            }
+
+            let created_at = metadata.remove("created_at").and_then(|v| v.parse::<u64>().ok());
+            let indexed_at = metadata.remove("indexed_at").and_then(|v| v.parse::<u64>().ok());
+
+            let final_snippet = if is_fts_match {
+                fts_snippet
+            } else {
+                if full_text.is_empty() {
+                    "Content snippet unavailable.".to_string()
+                } else {
+                    full_text.chars().take(200).collect::<String>()
+                }
+            };
+
+            results.push(SearchResult {
+                id: id.clone(),
+                title: parsed_filename.clone(),
+                snippet: final_snippet,
+                plugin_id: plugin_id.to_string(),
+                score,
+                filename: Some(parsed_filename),
+                filepath: Some(id),
+                metadata,
+                created_at,
+                indexed_at,
+                full_context: Some(full_text.chars().take(2500).collect::<String>()),
+                ai_matched: None,
+                ai_reasoning: None,
+            });
+        }
+
+        drop(cache_guard);
+
         if !ghosts_to_heal.is_empty() {
+            let conn = match self.conn.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             conn.execute("BEGIN TRANSACTION", []).ok();
-            for ghost in ghosts_to_heal {
-                conn.execute("DELETE FROM documents WHERE id = ?1", params![&ghost]).ok();
-                conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![&ghost]).ok();
+            for ghost in &ghosts_to_heal {
+                conn.execute("DELETE FROM documents WHERE id = ?1", params![ghost]).ok();
+                conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![ghost]).ok();
             }
             conn.execute("COMMIT", []).ok();
+            
+            let mut cache_write = self.cache.write().unwrap();
+            for ghost in ghosts_to_heal {
+                cache_write.remove(&ghost);
+            }
         }
 
         results
