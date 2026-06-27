@@ -46,6 +46,8 @@ const GnomeLensVideoPreview = GObject.registerClass({
         this._sink = null;
         this._busWatchId = 0;
         this._imageContent = null;
+        this._contentWidth = 0;
+        this._contentHeight = 0;
         this._proc = null;
         this._lastTempFile = null;
         this._emptySampleCount = 0;
@@ -94,32 +96,25 @@ const GnomeLensVideoPreview = GObject.registerClass({
         console.log('[Gnome Lens Debug] _stopVideo called.');
         
         if (this._playbackTimerId > 0) {
-            let id = this._playbackTimerId;
+            GLib.source_remove(this._playbackTimerId);
             this._playbackTimerId = 0;
-            try { GLib.source_remove(id); } catch(e) {}
         }
 
         if (this._idleRenderId > 0) {
-            let id = this._idleRenderId;
+            GLib.source_remove(this._idleRenderId);
             this._idleRenderId = 0;
-            try { GLib.source_remove(id); } catch(e) {}
         }
         
         if (this._pipeline) {
             console.log('[Gnome Lens Debug] Setting pipeline state to NULL');
             let bus = this._pipeline.get_bus();
             if (this._busWatchId > 0 && bus) {
-                let bwId = this._busWatchId;
+                bus.disconnect(this._busWatchId);
+                bus.remove_signal_watch();
                 this._busWatchId = 0;
-                try {
-                    bus.disconnect(bwId);
-                    bus.remove_signal_watch();
-                } catch(e) {}
             }
             
-            try {
-                this._pipeline.set_state(Gst.State.NULL);
-            } catch (e) { }
+            this._pipeline.set_state(Gst.State.NULL);
             
             this._pipeline = null;
             this._sink = null;
@@ -173,7 +168,7 @@ const GnomeLensVideoPreview = GObject.registerClass({
             let pipeline = Gst.ElementFactory.make('playbin', null);
             if (!pipeline) throw new Error("Could not construct playbin");
 
-            pipeline.set_property('flags', 1); // 1 = GST_PLAY_FLAG_VIDEO (strictly drops audio generation overhead)
+            pipeline.set_property('flags', 1); // 1 = GST_PLAY_FLAG_VIDEO
             pipeline.set_property('uri', Gio.File.new_for_path(this._filepath).get_uri());
 
             console.log('[Gnome Lens Debug] Creating appsink...');
@@ -183,7 +178,7 @@ const GnomeLensVideoPreview = GObject.registerClass({
             let caps = Gst.Caps.from_string('video/x-raw, format=RGBA');
             sink.set_property('caps', caps);
             sink.set_property('drop', true);
-            sink.set_property('max-buffers', 1); // Clamp buffer queue limits to prevent memory pool allocation lockouts
+            sink.set_property('max-buffers', 1);
             sink.set_property('emit-signals', false); 
 
             pipeline.set_property('video-sink', sink);
@@ -224,7 +219,6 @@ const GnomeLensVideoPreview = GObject.registerClass({
                 throw new Error("Failed to set pipeline to PLAYING");
             }
 
-            // Frame polling rate synchronized to monitor refresh rate using a non-blocking fast timer
             this._playbackTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
                 if (!this._sink || !this.visible || !this._pipeline) return GLib.SOURCE_CONTINUE;
                 
@@ -245,7 +239,6 @@ const GnomeLensVideoPreview = GObject.registerClass({
                         console.log(`[Gnome Lens Debug] Successfully pulled sample ${this._successfulSampleCount}`);
                     }
                     
-                    // Deflect frame texture packing operations onto the next immediate compositor cycle to keep UI fluid
                     if (this._idleRenderId === 0) {
                         this._idleRenderId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
                             this._idleRenderId = 0;
@@ -311,12 +304,15 @@ const GnomeLensVideoPreview = GObject.registerClass({
         if (isMapped) {
             let data = mapInfo.data; 
 
-            if (!this._imageContent) {
-                if (St.ImageContent) {
+            if (!this._imageContent || this._contentWidth !== width || this._contentHeight !== height) {
+                if (typeof St.ImageContent.new_with_preferred_size === 'function') {
+                    this._imageContent = St.ImageContent.new_with_preferred_size(width, height);
+                } else {
                     this._imageContent = new St.ImageContent();
-                } else if (Clutter.Image) {
-                    this._imageContent = new Clutter.Image();
                 }
+                
+                this._contentWidth = width;
+                this._contentHeight = height;
                 this._imageActor.set_content(this._imageContent);
             }
             
@@ -362,9 +358,8 @@ const GnomeLensVideoPreview = GObject.registerClass({
 
     _extractFrameAndScheduleNext(isScrubbing = false) {
         if (this._playbackTimerId > 0) {
-            let id = this._playbackTimerId;
+            GLib.source_remove(this._playbackTimerId);
             this._playbackTimerId = 0;
-            try { GLib.source_remove(id); } catch(e) {}
         }
         
         if (this._proc) {

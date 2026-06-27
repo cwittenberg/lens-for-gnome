@@ -3,3 +3,4 @@ target
 .fastembed_cache
 Cargo.lock
 gnome-extension/build
+gnome-extension/shexli-report.json
