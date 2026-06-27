@@ -56,6 +56,31 @@
       <summary>Prioritize Folders</summary>
       <description>Force the background engine to always return a few folder matches if any exist.</description>
     </key>
+    <key name="show-preview" type="b">
+      <default>true</default>
+      <summary>Show Media Preview</summary>
+      <description>Show a larger preview dialog when hovering over media files.</description>
+    </key>
+    <key name="preview-x" type="i">
+      <default>-1</default>
+      <summary>Preview Window X Position</summary>
+      <description>Saved X coordinate for the preview window.</description>
+    </key>
+    <key name="preview-y" type="i">
+      <default>-1</default>
+      <summary>Preview Window Y Position</summary>
+      <description>Saved Y coordinate for the preview window.</description>
+    </key>
+    <key name="preview-w" type="i">
+      <default>400</default>
+      <summary>Preview Window Width</summary>
+      <description>Saved width for the preview window.</description>
+    </key>
+    <key name="preview-h" type="i">
+      <default>300</default>
+      <summary>Preview Window Height</summary>
+      <description>Saved height for the preview window.</description>
+    </key>
     <key name="ui-color" type="s">
       <default>'#1e1e1e'</default>
       <summary>UI Background Color</summary>

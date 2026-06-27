@@ -286,8 +286,8 @@ impl IngestionPipeline {
             .ok()
             .and_then(|m| m.modified().ok().or_else(|| m.created().ok()))
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64);
+            .map(|d| d.as_secs() as u64)
+            .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u64);
 
         if let Some(db_modified) = self.store.get_document_modified_at(&path_str) {
             if modified_at <= db_modified && db_modified != 0 {
@@ -295,7 +295,7 @@ impl IngestionPipeline {
             }
         }
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u64;
 
         let ext = if is_dir {
             "directory".to_string()
@@ -433,7 +433,7 @@ impl IngestionPipeline {
                                 .ok()
                                 .and_then(|m| m.modified().ok().or_else(|| m.created().ok()))
                                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                                .map(|d| d.as_nanos() as u64)
+                                .map(|d| d.as_secs() as u64)
                                 .unwrap_or(0);
 
                             let needs_index = match db_state.get(&path_str) {

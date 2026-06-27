@@ -10,10 +10,17 @@ function sendDaemonCommand(payloadObj, onMessage) {
     let socketPath = GLib.get_home_dir() + '/.local/state/gnome-lens/gnome_lens.sock';
     let address = Gio.UnixSocketAddress.new(socketPath);
 
+    const cleanupIPC = (conn, inStream, outStream) => {
+        if (inStream) inStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+        if (outStream) outStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+        if (conn) conn.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+    };
+
     socketClient.connect_async(address, cancellable, (client, res) => {
+        let connection, outputStream;
         try {
-            let connection = client.connect_finish(res);
-            let outputStream = connection.get_output_stream();
+            connection = client.connect_finish(res);
+            outputStream = connection.get_output_stream();
             let payloadStr = JSON.stringify(payloadObj) + '\n';
             
             outputStream.write_all_async(payloadStr, GLib.PRIORITY_DEFAULT, cancellable, (stream, writeRes) => {
@@ -33,13 +40,20 @@ function sendDaemonCommand(payloadObj, onMessage) {
                                             onMessage(JSON.parse(text));
                                         }
                                         readLoop();
+                                    } else {
+                                        cleanupIPC(connection, inputStream, outputStream);
                                     }
-                                } catch (e) {}
+                                } catch (e) {
+                                    cleanupIPC(connection, inputStream, outputStream);
+                                }
                             });
                         };
                         readLoop();
+                    } else {
+                        cleanupIPC(connection, null, outputStream);
                     }
                 } catch (e) {
+                    cleanupIPC(connection, null, outputStream);
                     console.warn("Failed to write command to daemon:", e);
                 }
             });
@@ -327,17 +341,6 @@ export function buildIndexPage(settings, window) {
         return GLib.SOURCE_CONTINUE;
     });
 
-    window.connect('close-request', () => {
-        if (healthCheckId > 0) {
-            GLib.source_remove(healthCheckId);
-            healthCheckId = 0;
-        }
-        for (let t of _timeoutIds) {
-            if (t > 0) GLib.source_remove(t);
-        }
-        _timeoutIds = [];
-    });
-
     const scopeGroup = new Adw.PreferencesGroup({ title: 'Indexing Scope' });
     
     const fullSysRow = new Adw.SwitchRow({
@@ -441,7 +444,7 @@ export function buildIndexPage(settings, window) {
     pathGroup.add(addPathRow);
     updatePaths();
 
-    settings.connect('changed::index-full-system', () => {
+    let fullSysChangedId = settings.connect('changed::index-full-system', () => {
         pathGroup.set_sensitive(!settings.get_boolean('index-full-system'));
     });
     pathGroup.set_sensitive(!settings.get_boolean('index-full-system'));
@@ -576,6 +579,21 @@ export function buildIndexPage(settings, window) {
 
     updateServiceUI();
     loadStats();
+
+    window.connect('close-request', () => {
+        if (healthCheckId > 0) {
+            GLib.source_remove(healthCheckId);
+            healthCheckId = 0;
+        }
+        for (let t of _timeoutIds) {
+            if (t > 0) GLib.source_remove(t);
+        }
+        _timeoutIds = [];
+        if (fullSysChangedId > 0) {
+            settings.disconnect(fullSysChangedId);
+            fullSysChangedId = 0;
+        }
+    });
 
     return page;
 }

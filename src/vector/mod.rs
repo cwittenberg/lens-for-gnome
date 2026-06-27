@@ -129,6 +129,11 @@ impl VectorStore {
             conn.execute("UPDATE documents SET modified_at = 0", []).ok();
         }
 
+        // Deep sanitization pass: Ensure no residual high-precision exponents contaminate the comparison logic
+        println!("[Database] Normalizing existing timestamps to stable UNIX seconds...");
+        conn.execute("UPDATE documents SET modified_at = modified_at / 1000000000 WHERE modified_at > 1000000000000000", []).ok();
+        conn.execute("UPDATE documents SET modified_at = modified_at / 1000 WHERE modified_at > 1000000000000", []).ok();
+
         println!("[Database] Loading embeddings and metadata into RAM for instant search...");
         let mut cache = HashMap::new();
         if let Ok(mut stmt) = conn.prepare("SELECT id, modified_at, metadata, embedding FROM documents") {
@@ -138,7 +143,7 @@ impl VectorStore {
                     let modified_at: u64 = row.get(1).unwrap_or(0);
                     let metadata_json: String = row.get(2).unwrap_or_else(|_| "{}".to_string());
                     let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
-                    
+
                     let mut embedding = Vec::new();
                     if let Ok(blob_ref) = row.get_ref(3) {
                         if let Ok(bytes) = blob_ref.as_blob() {
@@ -345,7 +350,7 @@ impl VectorStore {
                      modified_at=excluded.modified_at,
                      metadata=excluded.metadata,
                      embedding=excluded.embedding",
-                params![path, modified_at, metadata_json, embedding_blob],
+                params![path, *modified_at, metadata_json, embedding_blob],
             ) {
                 eprintln!("[Database] Failed to insert document metadata for {}: {}", path, e);
                 continue;
@@ -457,7 +462,7 @@ impl VectorStore {
                     }
                 }
             }
-            drop(conn); // Explicitly drop to avoid drop order issues in tail expressions
+            drop(conn);
         }
 
         let is_dummy_vector = target_embedding.is_empty() || target_embedding.iter().all(|&v| v == 0.0);
@@ -622,7 +627,7 @@ impl VectorStore {
                     }
                 }
             }
-            drop(conn); // Explicitly drop to avoid drop order issues in tail expressions
+            drop(conn);
         }
 
         for (id, score, _filetype, is_fts_match, fts_snippet, _v_rank) in scored_candidates {
@@ -717,6 +722,50 @@ impl VectorStore {
             }
         }
 
+        results
+    }
+    
+    pub fn browse_directory(&self, path: &str) -> Vec<SearchResult> {
+        let cache_guard = self.cache.read().unwrap();
+        let mut results = Vec::new();
+        
+        let mut dir_prefix = path.to_string();
+        if !dir_prefix.ends_with('/') {
+            dir_prefix.push('/');
+        }
+
+        for doc in cache_guard.values() {
+            if doc.id.starts_with(&dir_prefix) && doc.id != dir_prefix {
+                let remainder = &doc.id[dir_prefix.len()..];
+                if !remainder.is_empty() && !remainder.contains('/') {
+                    let parsed_filename = Path::new(&doc.id).file_name().unwrap_or_default().to_string_lossy().to_string();
+                    let is_dir = doc.metadata.get("filetype").map(|s| s.as_str()) == Some("directory");
+                    
+                    results.push(SearchResult {
+                        id: doc.id.clone(),
+                        title: parsed_filename.clone(),
+                        snippet: if is_dir { "Directory".to_string() } else { "File".to_string() },
+                        plugin_id: if is_dir { "plugin:directory".to_string() } else { "plugin:vector_db".to_string() },
+                        score: if is_dir { 1.0 } else { 0.5 },
+                        filename: Some(parsed_filename),
+                        filepath: Some(doc.id.clone()),
+                        metadata: doc.metadata.clone(),
+                        created_at: Some(doc.modified_at),
+                        indexed_at: None,
+                        full_context: None,
+                        ai_matched: None,
+                        ai_reasoning: None,
+                    });
+                }
+            }
+        }
+
+        results.sort_by(|a, b| {
+            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+        });
+
+        results.truncate(250);
         results
     }
 }

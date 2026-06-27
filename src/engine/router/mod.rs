@@ -137,34 +137,69 @@ impl SystemRouter {
         // =====================================================================
         // THE INTERPRETER PATTERN: Extract Explicit System Rules deterministically 
         // =====================================================================
-        let mut clean_text_parts = Vec::new();
-        for token in search_query.raw_text.split_whitespace() {
-            let lower_token = token.to_lowercase();
-            
-            if lower_token.starts_with("ext:") || lower_token.starts_with("type:") {
-                let val = token.split(':').nth(1).unwrap_or("");
-                search_query.metadata_filters.insert("filetype".to_string(), val.to_lowercase());
-            } else if lower_token.starts_with("dir:") || lower_token.starts_with("path:") {
-                let val = token.split(':').nth(1).unwrap_or("");
-                let expanded = val.replace("~", &std::env::var("HOME").unwrap_or_default());
-                search_query.directory_filter = Some(expanded);
-            } else if lower_token.starts_with("after:") || lower_token.starts_with("since:") {
-                let val = token.split(':').nth(1).unwrap_or("");
-                if let Some(ts) = parse_date_to_timestamp(val) {
-                    search_query.min_timestamp = Some(ts);
-                }
-            } else if lower_token.starts_with("before:") {
-                let val = token.split(':').nth(1).unwrap_or("");
-                if let Some(ts) = parse_date_to_timestamp(val) {
-                    search_query.max_timestamp = Some(ts);
-                }
-            } else {
-                clean_text_parts.push(token);
-            }
+        
+        // NEW NATIVE FOLDER PARSER: We check the string BEFORE breaking it up by spaces!
+        let mut check_str = search_query.raw_text.clone();
+        if check_str.to_lowercase().starts_with("dir:") {
+            check_str = check_str[4..].trim().to_string();
+        } else if check_str.to_lowercase().starts_with("path:") {
+            check_str = check_str[5..].trim().to_string();
         }
         
-        // Re-join the query having stripped out the syntactical commands to prevent embedding pollution
-        search_query.raw_text = clean_text_parts.join(" ");
+        let expanded_full_query = check_str.replace("~", &std::env::var("HOME").unwrap_or_default());
+        
+        if std::path::Path::new(&expanded_full_query).is_dir() {
+            search_query.directory_filter = Some(expanded_full_query);
+            search_query.raw_text = String::new(); // Drop raw text to force directory-browse
+        } else {
+            // Standard parsing for multi-token rules
+            let mut clean_text_parts = Vec::new();
+            
+            for token in search_query.raw_text.split_whitespace() {
+                let lower_token = token.to_lowercase();
+                
+                if lower_token.starts_with("ext:") || lower_token.starts_with("type:") {
+                    let val = token.split(':').nth(1).unwrap_or("");
+                    search_query.metadata_filters.insert("filetype".to_string(), val.to_lowercase());
+                } else if lower_token.starts_with("after:") || lower_token.starts_with("since:") {
+                    let val = token.split(':').nth(1).unwrap_or("");
+                    if let Some(ts) = parse_date_to_timestamp(val) {
+                        search_query.min_timestamp = Some(ts);
+                    }
+                } else if lower_token.starts_with("before:") {
+                    let val = token.split(':').nth(1).unwrap_or("");
+                    if let Some(ts) = parse_date_to_timestamp(val) {
+                        search_query.max_timestamp = Some(ts);
+                    }
+                } else if !lower_token.starts_with("dir:") && !lower_token.starts_with("path:") {
+                    // Do not push the fallback token if it was an invalid dir request 
+                    clean_text_parts.push(token);
+                }
+            }
+            
+            // Re-join the query having stripped out the syntactical commands to prevent embedding pollution
+            search_query.raw_text = clean_text_parts.join(" ");
+        }
+
+        // =====================================================================
+        // PHASE 0.5: DIRECT DIRECTORY BROWSING INTERCEPT
+        // =====================================================================
+        if search_query.raw_text.is_empty() {
+            if let Some(dir) = &search_query.directory_filter {
+                let fp_start = Instant::now();
+                let browse_results = self.store.browse_directory(dir);
+                
+                println!("[Router DEBUG] Directory Browse took: {:.2?}", fp_start.elapsed());
+
+                send_chunk(serde_json::json!({
+                    "status": "final",
+                    "mode": "fast_pass",
+                    "results": browse_results
+                }).to_string());
+                
+                return;
+            }
+        }
 
         let filetypes = vec!["pdf", "docx", "txt", "csv", "png", "jpg", "xlsx", "directory"];
         for ft in &filetypes {

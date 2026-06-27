@@ -16,8 +16,8 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         this.callbacks = callbacks || {};
         this._isClearing = false;
         this._lastDirText = '';
+        this._autocompleteActive = false;
 
-        // Row 1: Location and File Type inputs
         let row1 = new St.BoxLayout({ 
             vertical: false,
             x_expand: true,
@@ -33,10 +33,8 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         row1.add_child(this._dirEntry.get_parent());
         row1.add_child(this._extEntry.get_parent());
 
-        // EXPLICIT VERTICAL SPACING WIDGET (Ensuring separation)
         let verticalSpacer = new St.Widget({ height: 20 });
 
-        // Row 2: Date Selector & Reset
         let row2 = new St.BoxLayout({ 
             vertical: false, 
             x_expand: true,
@@ -61,13 +59,12 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         this._activeDateOption = this._dateOptions[0];
         this._datePills = [];
 
-        // Dynamic width allocation for date pills to avoid ANY text truncation
         let currentWidth = 0;
-        let maxWidthAllowance = 600; // conservative max width before dropping items
+        let maxWidthAllowance = 600;
 
         this._dateOptions.forEach(opt => {
             let label = new St.Label({ text: opt.label });
-            label.clutter_text.ellipsize = 0; // Pango.EllipsizeMode.NONE (0) - Guarantees NO text shortening
+            label.clutter_text.ellipsize = 0; 
             
             let pill = new St.Button({
                 child: label,
@@ -82,7 +79,7 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
                 return Clutter.EVENT_STOP;
             }, this);
 
-            let estimatedWidth = opt.label.length * 10 + 32 + 8; // Pixel estimate per pill
+            let estimatedWidth = opt.label.length * 10 + 32 + 8;
             if (currentWidth + estimatedWidth <= maxWidthAllowance) {
                 this._datePillsBox.add_child(pill);
                 this._datePills.push(pill);
@@ -92,7 +89,6 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         
         row2.add_child(this._datePillsBox);
 
-        // Pushes the reset button cleanly to the right
         let spacer = new St.Widget({ x_expand: true });
         row2.add_child(spacer);
 
@@ -163,9 +159,10 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         if (this._isClearing) return;
         
         let text = this._dirEntry.get_text();
+        this._autocompleteActive = false;
+
         if (text === this._lastDirText) return;
 
-        // Never autocomplete if the user is currently deleting text
         if (text.length < this._lastDirText.length) {
             this._lastDirText = text;
             return;
@@ -173,7 +170,6 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         
         this._lastDirText = text;
 
-        // Never autocomplete if the cursor is not explicitly at the end of the input
         let cursorPos = this._dirEntry.clutter_text.get_cursor_position();
         if (cursorPos !== -1 && cursorPos !== text.length) {
             return;
@@ -234,7 +230,7 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
                         if (name.startsWith('.') && !prefix.startsWith('.')) continue;
                         if (name.toLowerCase().startsWith(prefix) && name !== prefix) {
                             match = name;
-                            break; // Stop at the very first valid alphabetical match
+                            break; 
                         }
                     }
                 }
@@ -242,7 +238,9 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
                 iter.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
 
                 if (match) {
-                    // Inject the inline autocomplete suggestion seamlessly
+                    // Prevent async overwrites if user continued typing
+                    if (this._dirEntry.get_text() !== originalText) return;
+
                     let newText = originalText;
                     if (!newText.endsWith('/')) {
                         newText = newText.substring(0, newText.lastIndexOf('/') + 1);
@@ -251,10 +249,9 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
                     
                     this._isClearing = true;
                     this._dirEntry.set_text(newText);
-                    
-                    // Select the autocompleted portion so it instantly overwrites if user keeps typing
                     this._dirEntry.clutter_text.set_selection(originalText.length, newText.length);
                     this._lastDirText = newText;
+                    this._autocompleteActive = true;
                     this._isClearing = false;
                 }
             } catch (e) { }
@@ -263,15 +260,19 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
 
     _onDirKeyPress(actor, event) {
         let symbol = event.get_key_symbol();
-        let selectionBound = this._dirEntry.clutter_text.get_selection_bound();
+        let len = this._dirEntry.get_text().length;
         
-        // If there's an active inline selection, navigating right or hitting tab explicitly locks it in
-        if (selectionBound !== -1) {
-            if (symbol === Clutter.KEY_Right || symbol === Clutter.KEY_End || symbol === Clutter.KEY_Tab) {
-                this._dirEntry.clutter_text.set_selection(-1, -1);
-                this._dirEntry.clutter_text.set_cursor_position(-1);
+        if (this._autocompleteActive) {
+            if (symbol === Clutter.KEY_Right || symbol === Clutter.KEY_End || symbol === Clutter.KEY_Tab || symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
+                this._autocompleteActive = false;
+                this._isClearing = true;
+                this._dirEntry.clutter_text.set_selection(len, len);
+                this._isClearing = false;
+                
                 if (this.callbacks.onFiltersChanged) this.callbacks.onFiltersChanged();
                 return Clutter.EVENT_STOP;
+            } else {
+                this._autocompleteActive = false;
             }
         }
         return Clutter.EVENT_PROPAGATE;
@@ -336,6 +337,10 @@ class GnomeLensSearchBar extends St.BoxLayout {
         this._setQueryIdleId = 0;
         this._focusIdleId = 0;
         this._isSearching = false;
+        
+        this._isClearing = false;
+        this._lastText = '';
+        this._autocompleteActive = false;
 
         this._searchIcon = new St.Icon({
             icon_name: 'system-search-symbolic',
@@ -412,8 +417,81 @@ class GnomeLensSearchBar extends St.BoxLayout {
     }
 
     _onTextChanged() {
+        if (this._isClearing) return;
+
         let text = this._entry.get_text();
+        this._autocompleteActive = false; // Reset intercept flag if user typed
+
         this._clearButton.visible = text.length > 0;
+
+        let cursorPos = this._entry.clutter_text.get_cursor_position();
+
+        // Check if we should fetch autocomplete for paths
+        if (text !== this._lastText && text.length > this._lastText.length) {
+            if (cursorPos === -1 || cursorPos === text.length) {
+                let lastToken = "";
+                let tokenStartIdx = -1;
+                
+                let tildeIdx = text.lastIndexOf(' ~/');
+                let slashIdx = text.lastIndexOf(' /');
+                let startTilde = text.startsWith('~/') ? 0 : -1;
+                let startSlash = text.startsWith('/') ? 0 : -1;
+                
+                let idx = Math.max(
+                    tildeIdx !== -1 ? tildeIdx + 1 : -1,
+                    slashIdx !== -1 ? slashIdx + 1 : -1,
+                    startTilde,
+                    startSlash
+                );
+                
+                if (idx !== -1) {
+                    lastToken = text.substring(idx);
+                    tokenStartIdx = idx;
+                }
+
+                if (lastToken.length > 0) {
+                    let searchPath = lastToken;
+                    if (searchPath.startsWith('~/')) {
+                        searchPath = GLib.get_home_dir() + searchPath.slice(1);
+                    } else if (searchPath === '~') {
+                        searchPath = GLib.get_home_dir();
+                    }
+
+                    let file = Gio.File.new_for_path(searchPath);
+                    let parent = file;
+                    let prefix = '';
+                    
+                    if (!lastToken.endsWith('/')) {
+                        parent = file.get_parent();
+                        prefix = file.get_basename().toLowerCase();
+                    }
+
+                    if (parent) {
+                        parent.query_info_async(Gio.FILE_ATTRIBUTE_STANDARD_TYPE, Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null, (obj, res) => {
+                            try {
+                                let info = obj.query_info_finish(res);
+                                if (info.get_file_type() === Gio.FileType.DIRECTORY) {
+                                    parent.enumerate_children_async(
+                                        'standard::name,standard::type',
+                                        Gio.FileQueryInfoFlags.NONE,
+                                        GLib.PRIORITY_DEFAULT,
+                                        null,
+                                        (pObj, pRes) => {
+                                            try {
+                                                let iter = pObj.enumerate_children_finish(pRes);
+                                                this._fetchSuggestions(iter, text, prefix, tokenStartIdx);
+                                            } catch (e) { }
+                                        }
+                                    );
+                                }
+                            } catch (e) { }
+                        });
+                    }
+                }
+            }
+        }
+
+        this._lastText = text;
 
         if (this._debounceId > 0) {
             GLib.source_remove(this._debounceId);
@@ -425,15 +503,102 @@ class GnomeLensSearchBar extends St.BoxLayout {
             return;
         }
 
-        this._debounceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 350, () => {
-            this._debounceId = 0;
+        let delay = 350;
+        let isDirQuery = (text.startsWith('/') || text.startsWith('~/')) && text.endsWith('/');
+        
+        // Instant search when they type a trailing slash for a directory
+        if (isDirQuery) {
+            delay = 0; 
+        }
+
+        if (delay === 0) {
             if (this.callbacks.onSearch) this.callbacks.onSearch(text.trim());
-            return GLib.SOURCE_REMOVE;
+        } else {
+            this._debounceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+                this._debounceId = 0;
+                if (this.callbacks.onSearch) this.callbacks.onSearch(text.trim());
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+    }
+
+    _fetchSuggestions(iter, originalText, prefix, tokenStartIdx) {
+        iter.next_files_async(50, GLib.PRIORITY_DEFAULT, null, (obj, res) => {
+            try {
+                let infos = obj.next_files_finish(res);
+                if (!infos || infos.length === 0) {
+                    iter.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+                    return;
+                }
+
+                let match = null;
+                for (let info of infos) {
+                    if (info.get_file_type() === Gio.FileType.DIRECTORY) {
+                        let name = info.get_name();
+                        if (name.startsWith('.') && !prefix.startsWith('.')) continue;
+                        if (name.toLowerCase().startsWith(prefix) && name !== prefix) {
+                            match = name;
+                            break; 
+                        }
+                    }
+                }
+
+                iter.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+
+                if (match) {
+                    // Critical: if the user typed more while we were fetching asynchronously, abort
+                    if (this._entry.get_text() !== originalText) {
+                        return;
+                    }
+
+                    let newText = originalText;
+                    let lastSlash = newText.lastIndexOf('/');
+                    if (lastSlash >= tokenStartIdx) {
+                        newText = newText.substring(0, lastSlash + 1);
+                    } else {
+                        newText = newText.substring(0, tokenStartIdx);
+                    }
+                    newText += match + '/';
+                    
+                    this._isClearing = true;
+                    this._entry.set_text(newText);
+                    this._entry.clutter_text.set_selection(originalText.length, newText.length);
+                    this._lastText = newText;
+                    this._autocompleteActive = true;
+                    this._isClearing = false;
+                }
+            } catch (e) { }
         });
     }
 
     _onKeyPress(actor, event) {
         let symbol = event.get_key_symbol();
+        let text = this._entry.get_text();
+        let len = text.length;
+
+        // Catch active autocompletes
+        if (this._autocompleteActive) {
+            if (symbol === Clutter.KEY_Right || symbol === Clutter.KEY_End || symbol === Clutter.KEY_Tab || symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
+                this._autocompleteActive = false;
+                
+                this._isClearing = true;
+                this._entry.clutter_text.set_selection(len, len);
+                this._isClearing = false;
+                
+                if (this._debounceId > 0) {
+                    GLib.source_remove(this._debounceId);
+                    this._debounceId = 0;
+                }
+                
+                if (this.callbacks.onSearch) {
+                    this.callbacks.onSearch(text.trim());
+                }
+                return Clutter.EVENT_STOP;
+            } else {
+                this._autocompleteActive = false;
+            }
+        }
+
         if (symbol === Clutter.KEY_Escape) {
             if (this.callbacks.onClose) this.callbacks.onClose();
             return Clutter.EVENT_STOP;
@@ -446,15 +611,31 @@ class GnomeLensSearchBar extends St.BoxLayout {
             if (this.callbacks.onNavigateUp) this.callbacks.onNavigateUp();
             return Clutter.EVENT_STOP;
         }
+        
+        // Standard explicit search invocation
         if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
-            if (this.callbacks.onNavigateEnter) this.callbacks.onNavigateEnter(this._entry.get_text().trim());
+            if (this._debounceId > 0) {
+                GLib.source_remove(this._debounceId);
+                this._debounceId = 0;
+            }
+            if (this.callbacks.onSearch) {
+                this.callbacks.onSearch(text.trim());
+            }
+            if (this.callbacks.onNavigateEnter) {
+                this.callbacks.onNavigateEnter(text.trim());
+            }
             return Clutter.EVENT_STOP;
         }
+
         return Clutter.EVENT_PROPAGATE;
     }
 
     setQuery(text, selectAll = true) {
+        this._isClearing = true;
         this._entry.set_text(text);
+        this._lastText = text;
+        this._isClearing = false;
+        
         if (text.length > 0) {
             if (this._setQueryIdleId > 0) {
                 GLib.source_remove(this._setQueryIdleId);

@@ -1,3 +1,4 @@
+/* gnome-extension/stylesheet.css */
 /* ========================================================================
  * 1. BACKDROP AND CORE DIALOG
  * ======================================================================== */
@@ -351,4 +352,40 @@
     font-style: italic;
     padding-top: 8px;
     border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+/* ========================================================================
+ * 7. MEDIA PREVIEW DIALOG
+ * ======================================================================== */
+.lens-preview-dialog {
+    padding: 0;
+    overflow: hidden;
+}
+
+.lens-preview-header {
+    padding: 8px 12px;
+    background-color: rgba(0, 0, 0, 0.4);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    cursor: move;
+}
+
+.lens-preview-title {
+    color: #ffffff;
+    font-weight: bold;
+    font-size: 11pt;
+}
+
+.lens-preview-content {
+    background-color: #000000;
+    padding: 4px;
+}
+
+.lens-preview-resize-handle {
+    background-color: rgba(255, 255, 255, 0.15);
+    border-top-left-radius: 4px;
+    cursor: nwse-resize;
+}
+
+.lens-preview-resize-handle:hover {
+    background-color: rgba(53, 132, 228, 0.6);
 }

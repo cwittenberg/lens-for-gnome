@@ -10,10 +10,17 @@ function sendDaemonCommand(payloadObj, onMessage) {
     let socketPath = GLib.get_home_dir() + '/.local/state/gnome-lens/gnome_lens.sock';
     let address = Gio.UnixSocketAddress.new(socketPath);
 
+    const cleanupIPC = (conn, inStream, outStream) => {
+        if (inStream) inStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+        if (outStream) outStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+        if (conn) conn.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+    };
+
     socketClient.connect_async(address, cancellable, (client, res) => {
+        let connection, outputStream;
         try {
-            let connection = client.connect_finish(res);
-            let outputStream = connection.get_output_stream();
+            connection = client.connect_finish(res);
+            outputStream = connection.get_output_stream();
             let payloadStr = JSON.stringify(payloadObj) + '\n';
             
             outputStream.write_all_async(payloadStr, GLib.PRIORITY_DEFAULT, cancellable, (stream, writeRes) => {
@@ -33,13 +40,21 @@ function sendDaemonCommand(payloadObj, onMessage) {
                                             onMessage(JSON.parse(text));
                                         }
                                         readLoop();
+                                    } else {
+                                        cleanupIPC(connection, inputStream, outputStream);
                                     }
-                                } catch (e) {}
+                                } catch (e) {
+                                    cleanupIPC(connection, inputStream, outputStream);
+                                }
                             });
                         };
                         readLoop();
+                    } else {
+                        cleanupIPC(connection, null, outputStream);
                     }
-                } catch (e) {}
+                } catch (e) {
+                    cleanupIPC(connection, null, outputStream);
+                }
             });
         } catch (e) {
             if (onMessage) {

@@ -2,16 +2,79 @@
   "spec_version": "2026-04-02",
   "summary": {
     "input_path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip",
-    "finding_count": 0,
-    "severity_counts": {},
-    "status": "clean"
+    "finding_count": 1,
+    "severity_counts": {
+      "warning": 1
+    },
+    "status": "issues_found"
   },
-  "findings": [],
+  "findings": [
+    {
+      "rule_id": "EGO-A-004",
+      "title": "extension files should not contain excessive ungated console logging",
+      "severity": "warning",
+      "message": "File contains 30 ungated console.log/warn/error calls (threshold: 5).",
+      "evidence": [
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:ui_preview_video.js",
+          "line": 54,
+          "snippet": "console.log(`[Gnome Lens Debug] GnomeLensVideoPreview initialized for ${filepath}`)"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:ui_preview_video.js",
+          "line": 71,
+          "snippet": "console.log(`[Gnome Lens Debug] scrub called with offset: ${offset}`)"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:ui_preview_video.js",
+          "line": 77,
+          "snippet": "console.log(`[Gnome Lens Debug] GStreamer seeking to target nanoseconds: ${target}`)"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:ui_preview_video.js",
+          "line": 80,
+          "snippet": "console.log('[Gnome Lens Debug] GStreamer query_position failed during scrub.')"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:ui_preview_video.js",
+          "line": 84,
+          "snippet": "console.log(`[Gnome Lens Debug] Fallback scrub shifting frame counter to time: ${this._currentTime}`)"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:ui_preview_video.js",
+          "line": 94,
+          "snippet": "console.log('[Gnome Lens Debug] _stopVideo called.')"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:ui_preview_video.js",
+          "line": 109,
+          "snippet": "console.log('[Gnome Lens Debug] Setting pipeline state to NULL')"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:ui_preview_video.js",
+          "line": 143,
+          "snippet": "console.log('[Gnome Lens Debug] Attempting to load native system cache thumbnail fallback...')"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:ui_preview_video.js",
+          "line": 160,
+          "snippet": "console.log(`[Gnome Lens Debug] _startGstVideo initiated for: ${this._filepath}`)"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:ui_preview_video.js",
+          "line": 164,
+          "snippet": "console.log('[Gnome Lens Debug] GStreamer unavailable on host system. Directing to subprocess extraction loops.')"
+        }
+      ],
+      "source_url": "https://gjs.guide/extensions/review-guidelines/review-guidelines.html#no-excessive-logging",
+      "source_section": "No excessive logging"
+    }
+  ],
   "artifacts": {
     "root": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip",
     "metadata_path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/gnome-lens@cwittenberg.shell-extension.zip:metadata.json",
-    "js_file_count": 14,
-    "file_count": 26,
+    "js_file_count": 18,
+    "file_count": 30,
     "limits": {
       "max_files": 5000,
       "max_file_size_bytes": 10485760,

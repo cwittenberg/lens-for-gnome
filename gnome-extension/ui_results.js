@@ -14,6 +14,8 @@ class GnomeLensResultsList extends St.ScrollView {
             y_expand: true,
             hscrollbar_policy: St.PolicyType.NEVER,
             vscrollbar_policy: St.PolicyType.AUTOMATIC,
+            reactive: true,
+            can_focus: true
         });
 
         this._settings = settings;
@@ -32,6 +34,37 @@ class GnomeLensResultsList extends St.ScrollView {
         });
         
         this.add_child(this._resultsBox);
+        
+        this.connectObject('key-press-event', this._onKeyPressEvent.bind(this), this);
+    }
+
+    _onKeyPressEvent(actor, keyEvent) {
+        let symbol = keyEvent.get_key_symbol();
+        if (symbol === Clutter.KEY_Down) {
+            this.selectNext();
+            return Clutter.EVENT_STOP;
+        } else if (symbol === Clutter.KEY_Up) {
+            if (this._selectedIndex === 0) {
+                if (this.callbacks.onFocusSearch) this.callbacks.onFocusSearch();
+            } else {
+                this.selectPrev();
+            }
+            return Clutter.EVENT_STOP;
+        } else if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
+            this.launchSelected();
+            return Clutter.EVENT_STOP;
+        } else if (symbol === Clutter.KEY_Right) {
+            if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
+                if (this.callbacks.onScrub) this.callbacks.onScrub(5);
+                return Clutter.EVENT_STOP;
+            }
+        } else if (symbol === Clutter.KEY_Left) {
+            if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
+                if (this.callbacks.onScrub) this.callbacks.onScrub(-5);
+                return Clutter.EVENT_STOP;
+            }
+        }
+        return Clutter.EVENT_PROPAGATE;
     }
 
     getResults() {
@@ -100,6 +133,10 @@ class GnomeLensResultsList extends St.ScrollView {
                 adjustment.set_value(y);
             } else if (y + height > val + pageSize) {
                 adjustment.set_value(y + height - pageSize);
+            }
+            
+            if (this.callbacks.onSelect) {
+                this.callbacks.onSelect(this._results[this._selectedIndex]);
             }
         }
     }
@@ -257,7 +294,6 @@ class GnomeLensResultsList extends St.ScrollView {
             return true;
         });
 
-        // Phase 1: Pure score sort to find absolute best matches regardless of bucket
         let scoreSorted = [...filteredArray].sort((a, b) => {
             let aMatch = a.ai_matched === true;
             let bMatch = b.ai_matched === true;
@@ -269,12 +305,10 @@ class GnomeLensResultsList extends St.ScrollView {
         let rest = [];
 
         if (activeFilter === 'All' && scoreSorted.length > 0) {
-            // Take up to 5 best matches to prevent folders from burying exact hits
             let maxBest = Math.min(5, scoreSorted.length);
             bestMatches = scoreSorted.slice(0, maxBest);
             rest = scoreSorted.slice(maxBest);
             
-            // Re-sort the rest into their categorical group buckets
             rest.sort((a, b) => {
                 let aMatch = a.ai_matched === true;
                 let bMatch = b.ai_matched === true;
@@ -304,7 +338,7 @@ class GnomeLensResultsList extends St.ScrollView {
         this._results = [...bestMatches, ...rest];
 
         let maxRender = this._results.length;
-        let currentGroup = -2; // distinct from any valid group (-1 to 4)
+        let currentGroup = -2; 
         let groupNames = ["Folders", "Applications & Tools", "Emails", "Indexed Documents", "Other Files"];
 
         for (let i = 0; i < maxRender; i++) {
@@ -314,7 +348,6 @@ class GnomeLensResultsList extends St.ScrollView {
             let group = getGroup(res);
             let isEmail = res.plugin_id === 'plugin:email' || ext === 'eml';
             
-            // Map best matches to a virtual group -1 (Top Hits)
             let displayGroup = (i < bestMatches.length) ? -1 : group;
             
             if (displayGroup !== currentGroup) {

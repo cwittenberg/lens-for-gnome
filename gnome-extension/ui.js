@@ -9,6 +9,7 @@ import ServiceClient from './service.js';
 import { GnomeLensSearchBar, GnomeLensAdvancedFilters } from './ui_search.js';
 import { GnomeLensResultsList } from './ui_results.js';
 import { GnomeLensSynthesis, GnomeLensStatus } from './ui_status.js';
+import { GnomeLensPreview } from './ui_preview.js';
 
 export const GnomeLensUI = GObject.registerClass({
     GTypeName: 'GnomeLensUI',
@@ -83,14 +84,11 @@ export const GnomeLensUI = GObject.registerClass({
         let theme = themeContext.get_theme();
         if (!theme) return;
 
-        // Unload the old custom theme to prevent stacking and memory leaks
         if (this._currentThemeFile) {
             theme.unload_stylesheet(this._currentThemeFile);
             this._currentThemeFile = null;
         }
 
-        // If a path exists, load it. Otherwise, leaving it unloaded means the extension's
-        // root stylesheet.css naturally takes over.
         if (themePath) {
             let fileToLoad = Gio.File.new_for_path(themePath);
             if (fileToLoad.query_exists(null)) {
@@ -107,8 +105,6 @@ export const GnomeLensUI = GObject.registerClass({
         
         let bgCss = '';
         
-        // If a theme overrides ui-color, it will reset it to empty. 
-        // We only apply the inline style if a valid hex is set.
         if (color && /^#[0-9A-Fa-f]{6}$/.test(color)) {
             let r = parseInt(color.slice(1, 3), 16);
             let g = parseInt(color.slice(3, 5), 16);
@@ -152,7 +148,7 @@ export const GnomeLensUI = GObject.registerClass({
         this._dialog.connectObject('button-press-event', () => {
             return Clutter.EVENT_STOP;
         }, this);
-        
+
         this._searchBar = new GnomeLensSearchBar(this._settings, {
             onClose: () => this.close(true),
             onToggleFilters: () => {
@@ -172,6 +168,7 @@ export const GnomeLensUI = GObject.registerClass({
                 this._searchBar.setCount(0);
                 this._advancedFilters.clear();
                 this._updatePosition(false, true);
+                if (this._preview) this._preview.hide();
             },
             onSearch: (text) => {
                 this._triggerBackendSearch(text);
@@ -190,8 +187,11 @@ export const GnomeLensUI = GObject.registerClass({
                 }
             },
             onNavigateDown: () => {
-                if (this._resultsList.hasResults() && this._resultsList.getSelectedIndex() < this._resultsList.getCount() - 1) {
-                    this._resultsList.selectNext();
+                if (this._resultsList.hasResults()) {
+                    if (this._resultsList.getSelectedIndex() === -1) {
+                        this._resultsList.selectNext();
+                    }
+                    this._resultsList.grab_key_focus();
                 } else if (this._resultsList.getSelectedIndex() === -1) {
                     if (this._historyIndex > 0) {
                         this._historyIndex--;
@@ -207,6 +207,14 @@ export const GnomeLensUI = GObject.registerClass({
                     this._resultsList.launchSelected();
                 } else if (query.length > 0) {
                     this._extension.saveHistory(query);
+                }
+            },
+            isPreviewVideoActive: () => {
+                return this._preview && this._preview.isVisible() && this._preview.isVideo();
+            },
+            onScrub: (offset) => {
+                if (this._preview && this._preview.isVisible() && typeof this._preview.scrub === 'function') {
+                    this._preview.scrub(offset);
                 }
             }
         });
@@ -234,7 +242,17 @@ export const GnomeLensUI = GObject.registerClass({
         this._dialog.add_child(this._filtersBox);
 
         this._resultsList = new GnomeLensResultsList(this._settings, {
-            onLaunch: (result, action) => this._launchResult(result, action)
+            onLaunch: (result, action) => this._launchResult(result, action),
+            onSelect: (result) => this._onResultSelected(result),
+            onFocusSearch: () => this._searchBar.grabFocus(),
+            isPreviewVideoActive: () => {
+                return this._preview && this._preview.isVisible() && this._preview.isVideo();
+            },
+            onScrub: (offset) => {
+                if (this._preview && this._preview.isVisible() && typeof this._preview.scrub === 'function') {
+                    this._preview.scrub(offset);
+                }
+            }
         });
         this._dialog.add_child(this._resultsList);
         
@@ -245,7 +263,33 @@ export const GnomeLensUI = GObject.registerClass({
         this._dialog.add_child(this._status);
         
         this.add_child(this._dialog);
+        
+        this._preview = new GnomeLensPreview(this._settings);
+        this.add_child(this._preview);
+        
         this._updatePosition(false, false);
+    }
+
+    _onResultSelected(result) {
+        if (!this._settings.get_boolean('show-preview')) {
+            if (this._preview) this._preview.hide();
+            return;
+        }
+
+        if (!result || !result.filepath) {
+            if (this._preview) this._preview.hide();
+            return;
+        }
+
+        let ext = result.filepath.split('.').pop().toLowerCase();
+        let isVideo = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv'].includes(ext);
+        let isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext);
+
+        if (isVideo || isImage) {
+            this._preview.showFile(result.filepath, isVideo ? 'video' : 'image');
+        } else {
+            this._preview.hide();
+        }
     }
 
     _updateFilterPills(results) {
@@ -285,13 +329,12 @@ export const GnomeLensUI = GObject.registerClass({
         if (options.length > 1) {
             this._filtersBox.show();
             
-            // Dynamic width allowance calculation to prevent truncation
             let maxAllowedWidth = this._dialog.get_width() - 48; 
             let currentAccumulatedWidth = 0;
 
             options.forEach(f => {
                 let label = new St.Label({ text: f });
-                label.clutter_text.ellipsize = 0; // Pango.EllipsizeMode.NONE (0) Ensures NO text truncation occurs
+                label.clutter_text.ellipsize = 0; 
 
                 let btn = new St.Button({
                     child: label,
@@ -309,7 +352,7 @@ export const GnomeLensUI = GObject.registerClass({
                     return Clutter.EVENT_STOP;
                 }, this);
                 
-                let estimatedWidth = f.length * 10 + 32 + 10; // Pixel padding estimate
+                let estimatedWidth = f.length * 10 + 32 + 10;
                 if (currentAccumulatedWidth + estimatedWidth <= maxAllowedWidth) {
                     this._filtersBox.add_child(btn);
                     currentAccumulatedWidth += estimatedWidth;
@@ -357,7 +400,6 @@ export const GnomeLensUI = GObject.registerClass({
         let dialogWidth = Math.max(700, Math.min(1000, Math.floor(monitor.width * 0.5)));
         this._dialog.set_width(dialogWidth);
         
-        // Reduced max height to ensure status bar stays visible on screen
         let maxScrollHeight = Math.max(300, Math.min(600, Math.floor(monitor.height * 0.45)));
         this._resultsList.set_style(`max-height: ${maxScrollHeight}px;`);
         
@@ -405,6 +447,17 @@ export const GnomeLensUI = GObject.registerClass({
 
         if (event.type() === Clutter.EventType.KEY_PRESS) {
             let symbol = event.get_key_symbol();
+            
+            if (this._preview && this._preview.isVisible() && this._preview.isVideo()) {
+                if (symbol === Clutter.KEY_Right) {
+                    this._preview.scrub(5);
+                    return Clutter.EVENT_STOP;
+                } else if (symbol === Clutter.KEY_Left) {
+                    this._preview.scrub(-5);
+                    return Clutter.EVENT_STOP;
+                }
+            }
+            
             if (symbol === Clutter.KEY_Escape) {
                 this.close(true);
                 return Clutter.EVENT_STOP;
@@ -483,6 +536,7 @@ export const GnomeLensUI = GObject.registerClass({
         this.reactive = false;
         this._dialog.reactive = false;
         
+        if (this._preview) this._preview.hide();
         this._service.cancel();
         this._status.stopAnimation();
         this._searchBar.stopPulse();
@@ -638,6 +692,7 @@ export const GnomeLensUI = GObject.registerClass({
         this._service.cancel();
         this._searchBar.startPulse();
         this._synthesis.setSynthesis(null);
+        if (this._preview) this._preview.hide();
         
         this._activeFilter = 'All';     
         this._updateFilterPills([]);
@@ -716,6 +771,11 @@ export const GnomeLensUI = GObject.registerClass({
                 }
             }
             this._currentThemeFile = null;
+        }
+
+        if (this._preview) {
+            this._preview.destroy();
+            this._preview = null;
         }
 
         this._service.cancel();

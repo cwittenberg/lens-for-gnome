@@ -3,6 +3,7 @@ import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
 import Gdk from 'gi://Gdk';
+import { checkDependencies, showDependencyDialog } from './prefs_dependencies.js';
 
 export function buildLookAndFeelPage(settings, window, extensionPrefs) {
     const page = new Adw.PreferencesPage({
@@ -42,6 +43,34 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
     });
     settings.bind('show-document-text', docTextRow, 'active', Gio.SettingsBindFlags.DEFAULT);
     resultsGroup.add(docTextRow);
+
+    const hasMediaDeps = checkDependencies();
+    const previewSwitch = new Gtk.Switch({ valign: Gtk.Align.CENTER });
+    const previewRow = new Adw.ActionRow({
+        title: 'Show Media Preview Dialog',
+        subtitle: hasMediaDeps 
+            ? 'Open a draggable video and image preview window when hovering over media files.'
+            : 'Dependencies missing. Click to see installation instructions.',
+    });
+    previewRow.add_suffix(previewSwitch);
+    previewRow.set_activatable_widget(previewSwitch);
+
+    if (hasMediaDeps) {
+        settings.bind('show-preview', previewSwitch, 'active', Gio.SettingsBindFlags.DEFAULT);
+    } else {
+        settings.set_boolean('show-preview', false);
+        previewSwitch.set_active(false);
+        
+        previewSwitch.connect('state-set', (sw, state) => {
+            if (state) {
+                sw.set_state(false); 
+                showDependencyDialog(window);
+                return true; 
+            }
+            return false;
+        });
+    }
+    resultsGroup.add(previewRow);
     
     page.add(resultsGroup);
 
@@ -172,7 +201,6 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
     themeRow.add_suffix(themeBox);
     uiGroup.add(themeRow);
 
-    // Disable the color/transparency manual settings if a theme is applied
     const updateThemeSensitivity = () => {
         let activeTheme = settings.get_string('ui-theme-path');
         let hasTheme = (activeTheme !== null && activeTheme.trim() !== '');
@@ -181,7 +209,7 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
         transRow.set_sensitive(!hasTheme);
     };
 
-    settings.connect('changed::ui-theme-path', updateThemeSensitivity);
+    let themePathChangedId = settings.connect('changed::ui-theme-path', updateThemeSensitivity);
     updateThemeSensitivity();
 
     const shadowRow = new Adw.SwitchRow({
@@ -233,6 +261,13 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
     typeRow.set_sensitive(settings.get_boolean('ui-animation'));
     
     animGroup.add(typeRow);
+
+    window.connect('close-request', () => {
+        if (themePathChangedId > 0) {
+            settings.disconnect(themePathChangedId);
+            themePathChangedId = 0;
+        }
+    });
 
     return page;
 }

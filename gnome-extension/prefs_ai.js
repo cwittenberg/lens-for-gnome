@@ -84,11 +84,11 @@ class AIEngineManager {
         let address = Gio.UnixSocketAddress.new(socketPath);
 
         socketClient.connect_async(address, cancellable, (client, res) => {
+            let connection, outputStream, inputStream;
             try {
-                let connection = client.connect_finish(res);
-                
-                let outputStream = connection.get_output_stream();
-                let inputStream = new Gio.DataInputStream({ base_stream: connection.get_input_stream() });
+                connection = client.connect_finish(res);
+                outputStream = connection.get_output_stream();
+                inputStream = new Gio.DataInputStream({ base_stream: connection.get_input_stream() });
                 inputStream.set_newline_type(Gio.DataStreamNewlineType.ANY);
                 
                 let payloadStr = JSON.stringify(payloadObj) + '\n';
@@ -96,7 +96,7 @@ class AIEngineManager {
                 outputStream.write_all_async(payloadStr, GLib.PRIORITY_DEFAULT, cancellable, (stream, writeRes) => {
                     try {
                         stream.write_all_finish(writeRes);
-                        this._readLoop(inputStream, cancellable, onMessage, connection);
+                        this._readLoop(inputStream, outputStream, cancellable, onMessage, connection);
                     } catch (e) {
                         this._cleanupConnection(inputStream, outputStream, connection);
                     }
@@ -114,9 +114,9 @@ class AIEngineManager {
         });
     }
 
-    _readLoop(inputStream, cancellable, onMessage, connection) {
+    _readLoop(inputStream, outputStream, cancellable, onMessage, connection) {
         if (cancellable.is_cancelled()) {
-            this._cleanupConnection(inputStream, null, connection);
+            this._cleanupConnection(inputStream, outputStream, connection);
             return;
         }
 
@@ -132,12 +132,12 @@ class AIEngineManager {
                             console.warn('[Gnome Lens] Invalid JSON in stream:', text);
                         }
                     }
-                    this._readLoop(inputStream, cancellable, onMessage, connection);
+                    this._readLoop(inputStream, outputStream, cancellable, onMessage, connection);
                 } else {
-                    this._cleanupConnection(inputStream, null, connection);
+                    this._cleanupConnection(inputStream, outputStream, connection);
                 }
             } catch (error) {
-                this._cleanupConnection(inputStream, null, connection);
+                this._cleanupConnection(inputStream, outputStream, connection);
             }
         });
     }
