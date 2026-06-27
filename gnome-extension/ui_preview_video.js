@@ -27,19 +27,238 @@ async function ensureGst() {
     }
 }
 
-const GnomeLensVideoPreview = GObject.registerClass({
+/**
+ * Format timestamps into classic 00:00 notation safely
+ */
+function formatTime(nanoseconds) {
+    if (!nanoseconds || nanoseconds < 0) return '00:00';
+    let totalSeconds = Math.floor(nanoseconds / 1000000000);
+    let mins = Math.floor(totalSeconds / 60);
+    let secs = totalSeconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+/**
+ * GnomeLensVideoControls
+ * Decoupled UI Component representing the playback scrub-rail, time displays, volume controls and mute states
+ */
+export const GnomeLensVideoControls = GObject.registerClass({
+    GTypeName: 'GnomeLensVideoControls'
+}, class GnomeLensVideoControls extends St.BoxLayout {
+    _init(player) {
+        super._init({
+            style_class: 'lens-video-hud',
+            vertical: true,
+            x_expand: true,
+            y_align: Clutter.ActorAlign.END,
+            reactive: true
+        });
+
+        this._player = player;
+        this._isDraggingScrub = false;
+        this._isDraggingVolume = false;
+
+        this._buildControlsUI();
+    }
+
+    _buildControlsUI() {
+        // 1. Scrub Bar Layout
+        this._scrubBar = new St.BoxLayout({
+            style_class: 'lens-slider-track',
+            vertical: false,
+            x_expand: true,
+            reactive: true,
+            height: 12
+        });
+        
+        this._scrubFill = new St.Widget({
+            style_class: 'lens-slider-fill',
+            width: 0,
+            x_align: Clutter.ActorAlign.START
+        });
+        this._scrubBar.add_child(this._scrubFill);
+        this.add_child(this._scrubBar);
+
+        // Connect Interactive Drag Events to the Scrub Bar Track
+        this._scrubBar.connectObject('button-press-event', (actor, event) => {
+            this._isDraggingScrub = true;
+            this._processScrubLocation(event);
+            return Clutter.EVENT_STOP;
+        }, this);
+
+        this._scrubBar.connectObject('motion-event', (actor, event) => {
+            if (this._isDraggingScrub) {
+                this._processScrubLocation(event);
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        }, this);
+
+        this._scrubBar.connectObject('button-release-event', () => {
+            this._isDraggingScrub = false;
+            return Clutter.EVENT_STOP;
+        }, this);
+
+        // 2. Toolbar Operations Sub-Row
+        let toolRow = new St.BoxLayout({
+            vertical: false,
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER
+        });
+
+        // Playback Time Metrics
+        this._timeLabel = new St.Label({
+            style_class: 'lens-time-label',
+            text: '00:00 / 00:00',
+            y_align: Clutter.ActorAlign.CENTER
+        });
+        toolRow.add_child(this._timeLabel);
+
+        // Extensible spacer
+        let centerSpacer = new St.Widget({ x_expand: true });
+        toolRow.add_child(centerSpacer);
+
+        // Volume Interactive Assembly
+        this._volumeBox = new St.BoxLayout({
+            style_class: 'lens-volume-box',
+            vertical: false,
+            y_align: Clutter.ActorAlign.CENTER
+        });
+
+        this._muteBtn = new St.Button({
+            style_class: 'lens-video-control-btn',
+            child: new St.Icon({ icon_name: 'audio-volume-high-symbolic', icon_size: 14 }),
+            y_align: Clutter.ActorAlign.CENTER
+        });
+        
+        this._muteBtn.connectObject('clicked', () => {
+            this._player.toggleMute();
+            return Clutter.EVENT_STOP;
+        }, this);
+        this._volumeBox.add_child(this._muteBtn);
+
+        this._volumeTrack = new St.BoxLayout({
+            style_class: 'lens-volume-slider',
+            width: 70,
+            height: 10,
+            reactive: true,
+            y_align: Clutter.ActorAlign.CENTER
+        });
+
+        this._volumeFill = new St.Widget({
+            style_class: 'lens-volume-fill',
+            width: 50,
+            x_align: Clutter.ActorAlign.START
+        });
+        this._volumeTrack.add_child(this._volumeFill);
+        this._volumeBox.add_child(this._volumeTrack);
+        toolRow.add_child(this._volumeBox);
+
+        // Connect Interactive Drag Events to the Volume Track
+        this._volumeTrack.connectObject('button-press-event', (actor, event) => {
+            this._isDraggingVolume = true;
+            this._processVolumeLocation(event);
+            return Clutter.EVENT_STOP;
+        }, this);
+
+        this._volumeTrack.connectObject('motion-event', (actor, event) => {
+            if (this._isDraggingVolume) {
+                this._processVolumeLocation(event);
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        }, this);
+
+        this._volumeTrack.connectObject('button-release-event', () => {
+            this._isDraggingVolume = false;
+            return Clutter.EVENT_STOP;
+        }, this);
+
+        this.add_child(toolRow);
+    }
+
+    _processScrubLocation(event) {
+        let [x, y] = event.get_coords();
+        let trackAlloc = this._scrubBar.get_allocation_box();
+        let trackWidth = trackAlloc.x2 - trackAlloc.x1;
+        if (trackWidth <= 0) return;
+
+        let [success, actorX, actorY] = this._scrubBar.transform_stage_point(x, y);
+        let percentage = Math.max(0.0, Math.min(1.0, actorX / trackWidth));
+        this._player.seekToPercentage(percentage);
+    }
+
+    _processVolumeLocation(event) {
+        let [x, y] = event.get_coords();
+        let trackAlloc = this._volumeTrack.get_allocation_box();
+        let trackWidth = trackAlloc.x2 - trackAlloc.x1;
+        if (trackWidth <= 0) return;
+
+        let [success, actorX, actorY] = this._volumeTrack.transform_stage_point(x, y);
+        let volumeLevel = Math.max(0.0, Math.min(1.0, actorX / trackWidth));
+        this._player.setVolumeLevel(volumeLevel);
+    }
+
+    updateUIState(positionNs, durationNs, currentVolume, isMuted) {
+        // Update operational scrub position
+        let trackAlloc = this._scrubBar.get_allocation_box();
+        let trackWidth = trackAlloc.x2 - trackAlloc.x1;
+        if (trackWidth > 0 && durationNs > 0) {
+            let pct = positionNs / durationNs;
+            this._scrubFill.set_width(Math.floor(trackWidth * pct));
+        }
+
+        // Update Time indicators
+        this._timeLabel.set_text(`${formatTime(positionNs)} / ${formatTime(durationNs)}`);
+
+        // Update Volume track visualization
+        let volAlloc = this._volumeTrack.get_allocation_box();
+        let volWidth = volAlloc.x2 - volAlloc.x1;
+        if (volWidth > 0) {
+            let activeVolPct = isMuted ? 0.0 : currentVolume;
+            this._volumeFill.set_width(Math.floor(volWidth * activeVolPct));
+        }
+
+        // Adjust context vector metrics icons
+        let muteIcon = this._muteBtn.get_child();
+        if (muteIcon) {
+            if (isMuted || currentVolume === 0) {
+                muteIcon.set_icon_name('audio-volume-muted-symbolic');
+            } else if (currentVolume < 0.4) {
+                muteIcon.set_icon_name('audio-volume-low-symbolic');
+            } else if (currentVolume < 0.7) {
+                muteIcon.set_icon_name('audio-volume-medium-symbolic');
+            } else {
+                muteIcon.set_icon_name('audio-volume-high-symbolic');
+            }
+        }
+    }
+});
+
+/**
+ * GnomeLensVideoPreview
+ * Structural Core implementation driving backend GStreamer pipeline initialization loops
+ */
+export const GnomeLensVideoPreview = GObject.registerClass({
     GTypeName: 'GnomeLensVideoPreview'
-}, class GnomeLensVideoPreview extends St.Bin {
+}, class GnomeLensVideoPreview extends St.Widget {
     _init(filepath) {
         super._init({
+            name: 'GnomeLensVideoPlayer',
+            style_class: 'lens-video-container',
             x_expand: true,
             y_expand: true,
             x_align: Clutter.ActorAlign.FILL,
-            y_align: Clutter.ActorAlign.FILL
+            y_align: Clutter.ActorAlign.FILL,
+            reactive: true
         });
 
         this._filepath = filepath;
-        this._currentTime = 0;
+        this._currentTimeNs = 0;
+        this._durationNs = 0;
+        this._volumeLevel = 0.8;
+        this._isMuted = false;
+
         this._playbackTimerId = 0;
         this._idleRenderId = 0;
         this._pipeline = null;
@@ -50,10 +269,9 @@ const GnomeLensVideoPreview = GObject.registerClass({
         this._contentHeight = 0;
         this._proc = null;
         this._lastTempFile = null;
-        this._emptySampleCount = 0;
-        this._successfulSampleCount = 0;
 
-        console.log(`[Gnome Lens Debug] GnomeLensVideoPreview initialized for ${filepath}`);
+        this._layoutManager = new Clutter.BinLayout();
+        this.set_layout_manager(this._layoutManager);
 
         this._imageActor = new Clutter.Actor({
             x_expand: true,
@@ -62,29 +280,78 @@ const GnomeLensVideoPreview = GObject.registerClass({
             y_align: Clutter.ActorAlign.FILL,
             content_gravity: Clutter.ContentGravity.RESIZE_ASPECT
         });
+        this.add_child(this._imageActor);
 
-        this.set_child(this._imageActor);
+        // Core Layout Assembly initialization
+        this._controlsHUD = new GnomeLensVideoControls(this);
+        this.add_child(this._controlsHUD);
+
+        // Bind interactive mouse scroll event loops for structural scrubbing
+        this.connectObject('scroll-event', this._onMouseScrollEvent.bind(this), this);
         this.connectObject('destroy', this._onDestroy.bind(this), this);
 
         this._startGstVideo();
     }
 
-    scrub(offset) {
-        console.log(`[Gnome Lens Debug] scrub called with offset: ${offset}`);
+    _onMouseScrollEvent(actor, event) {
+        let direction = event.get_scroll_direction();
+        if (direction === Clutter.ScrollDirection.UP) {
+            this.scrub(2); // Jump forward 2 seconds
+            return Clutter.EVENT_STOP;
+        } else if (direction === Clutter.ScrollDirection.DOWN) {
+            this.scrub(-2); // Jump backward 2 seconds
+            return Clutter.EVENT_STOP;
+        }
+        return Clutter.EVENT_PROPAGATE;
+    }
+
+    scrub(offsetSeconds) {
         if (this._pipeline) {
             let [success, pos] = this._pipeline.query_position(Gst.Format.TIME);
-            if (success) {
-                let target = pos + (offset * 1000000000);
-                if (target < 0) target = 0;
-                console.log(`[Gnome Lens Debug] GStreamer seeking to target nanoseconds: ${target}`);
-                this._pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, target);
-            } else {
-                console.log('[Gnome Lens Debug] GStreamer query_position failed during scrub.');
-            }
+            if (!success) pos = this._currentTimeNs;
+
+            let targetNs = pos + (offsetSeconds * 1000000000);
+            if (targetNs < 0) targetNs = 0;
+            if (this._durationNs > 0 && targetNs > this._durationNs) targetNs = this._durationNs;
+
+            this._pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, targetNs);
         } else {
-            this._currentTime = Math.max(0, this._currentTime + offset);
-            console.log(`[Gnome Lens Debug] Fallback scrub shifting frame counter to time: ${this._currentTime}`);
+            // Fallback process updates
+            this._currentTimeNs = Math.max(0, this._currentTimeNs + (offsetSeconds * 1000000000));
             this._extractFrameAndScheduleNext(true);
+        }
+    }
+
+    seekToPercentage(percentage) {
+        if (this._durationNs <= 0) return;
+        let targetNs = Math.floor(this._durationNs * percentage);
+        if (this._pipeline) {
+            this._pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, targetNs);
+        } else {
+            this._currentTimeNs = targetNs;
+            this._extractFrameAndScheduleNext(true);
+        }
+    }
+
+    setVolumeLevel(volume) {
+        this._volumeLevel = Math.max(0.0, Math.min(1.0, volume));
+        if (this._pipeline && !this._isMuted) {
+            this._pipeline.set_property('volume', this._volumeLevel);
+        }
+        this._updateHUD();
+    }
+
+    toggleMute() {
+        this._isMuted = !this._isMuted;
+        if (this._pipeline) {
+            this._pipeline.set_property('volume', this._isMuted ? 0.0 : this._volumeLevel);
+        }
+        this._updateHUD();
+    }
+
+    _updateHUD() {
+        if (this._controlsHUD && typeof this._controlsHUD.updateUIState === 'function') {
+            this._controlsHUD.updateUIState(this._currentTimeNs, this._durationNs, this._volumeLevel, this._isMuted);
         }
     }
 
@@ -93,38 +360,29 @@ const GnomeLensVideoPreview = GObject.registerClass({
     }
 
     _stopVideo() {
-        console.log('[Gnome Lens Debug] _stopVideo called.');
-        
         if (this._playbackTimerId > 0) {
             GLib.source_remove(this._playbackTimerId);
             this._playbackTimerId = 0;
         }
-
         if (this._idleRenderId > 0) {
             GLib.source_remove(this._idleRenderId);
             this._idleRenderId = 0;
         }
-        
         if (this._pipeline) {
-            console.log('[Gnome Lens Debug] Setting pipeline state to NULL');
             let bus = this._pipeline.get_bus();
             if (this._busWatchId > 0 && bus) {
                 bus.disconnect(this._busWatchId);
                 bus.remove_signal_watch();
                 this._busWatchId = 0;
             }
-            
             this._pipeline.set_state(Gst.State.NULL);
-            
             this._pipeline = null;
             this._sink = null;
         }
-        
         if (this._proc) {
             this._proc.force_exit();
             this._proc = null;
         }
-        
         if (this._lastTempFile) {
             let file = Gio.File.new_for_path(this._lastTempFile);
             if (file.query_exists(null)) {
@@ -134,29 +392,9 @@ const GnomeLensVideoPreview = GObject.registerClass({
         }
     }
 
-    _fallbackToSystemThumbnail() {
-        console.log('[Gnome Lens Debug] Attempting to load native system cache thumbnail fallback...');
-        let uri = Gio.File.new_for_path(this._filepath).get_uri();
-        let hash = GLib.compute_checksum_for_string(GLib.ChecksumType.MD5, uri, -1);
-        let cacheDir = GLib.get_user_cache_dir();
-        let thumbPath = GLib.build_filenamev([cacheDir, 'thumbnails', 'large', hash + '.png']);
-        
-        let thumbFile = Gio.File.new_for_path(thumbPath);
-        if (thumbFile.query_exists(null)) {
-            this.set_child(new St.Widget({
-                x_expand: true, y_expand: true,
-                x_align: Clutter.ActorAlign.FILL, y_align: Clutter.ActorAlign.FILL,
-                style: `background-image: url("file://${thumbPath}"); background-size: contain; background-repeat: no-repeat; background-position: center;`
-            }));
-        }
-    }
-    
     async _startGstVideo() {
-        console.log(`[Gnome Lens Debug] _startGstVideo initiated for: ${this._filepath}`);
         let hasGst = await ensureGst();
-        
         if (!hasGst) {
-            console.log('[Gnome Lens Debug] GStreamer unavailable on host system. Directing to subprocess extraction loops.');
             this._extractFrameAndScheduleNext();
             return;
         }
@@ -164,64 +402,59 @@ const GnomeLensVideoPreview = GObject.registerClass({
         this._stopVideo();
 
         try {
-            console.log('[Gnome Lens Debug] Creating playbin...');
             let pipeline = Gst.ElementFactory.make('playbin', null);
-            if (!pipeline) throw new Error("Could not construct playbin");
+            if (!pipeline) throw new Error("Could not construct pipeline layer instance");
 
-            pipeline.set_property('flags', 1); // 1 = GST_PLAY_FLAG_VIDEO
+            // GST_PLAY_FLAG_VIDEO = (1 << 0), GST_PLAY_FLAG_AUDIO = (1 << 1)
+            pipeline.set_property('flags', 1 | 2); 
             pipeline.set_property('uri', Gio.File.new_for_path(this._filepath).get_uri());
+            pipeline.set_property('volume', this._isMuted ? 0.0 : this._volumeLevel);
 
-            console.log('[Gnome Lens Debug] Creating appsink...');
             let sink = Gst.ElementFactory.make('appsink', null);
-            if (!sink) throw new Error("Could not construct appsink");
+            if (!sink) throw new Error("Could not construct hardware application sink container");
 
             let caps = Gst.Caps.from_string('video/x-raw, format=RGBA');
             sink.set_property('caps', caps);
             sink.set_property('drop', true);
             sink.set_property('max-buffers', 1);
-            sink.set_property('emit-signals', false); 
+            sink.set_property('emit-signals', false);
 
             pipeline.set_property('video-sink', sink);
             
             this._pipeline = pipeline;
             this._sink = sink;
 
-            console.log('[Gnome Lens Debug] Adding bus watch...');
             let bus = pipeline.get_bus();
             bus.add_signal_watch();
             this._busWatchId = bus.connect('message', (busMsg, message) => {
-                if (message.type === Gst.MessageType.STATE_CHANGED) {
-                    if (message.src === pipeline) {
-                        let [oldState, newState] = message.parse_state_changed();
-                        console.log(`[Gnome Lens Debug] Pipeline state changed from ${oldState} to ${newState}`);
-                    }
-                } else if (message.type === Gst.MessageType.ASYNC_DONE) {
-                    console.log('[Gnome Lens Debug] Bus Message: ASYNC_DONE (Pipeline prerolled and ready)');
+                if (message.type === Gst.MessageType.DURATION_CHANGED) {
+                    let [success, dur] = this._pipeline.query_duration(Gst.Format.TIME);
+                    if (success) this._durationNs = dur;
                 } else if (message.type === Gst.MessageType.EOS) {
-                    console.log('[Gnome Lens Debug] Bus Message: End of Stream. Looping timeline back to start point.');
                     if (this._pipeline) {
                         this._pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 0);
                     }
                 } else if (message.type === Gst.MessageType.ERROR) {
-                    let [err, debug] = message.parse_error();
-                    console.log(`[Gnome Lens Debug] Bus Message: ERROR - ${err.message} | ${debug}`);
-                    if (this._pipeline) {
-                        this._extractFrameAndScheduleNext();
-                    }
+                    if (this._pipeline) this._extractFrameAndScheduleNext();
                 }
             });
 
-            console.log('[Gnome Lens Debug] Setting pipeline state to PLAYING...');
             let stateReturn = pipeline.set_state(Gst.State.PLAYING);
-            console.log(`[Gnome Lens Debug] Pipeline set_state(PLAYING) returned: ${stateReturn}`);
-
             if (stateReturn === Gst.StateChangeReturn.FAILURE) {
-                throw new Error("Failed to set pipeline to PLAYING");
+                throw new Error("Pipeline compilation state configuration fault exception");
             }
 
+            // Sync metrics monitor loops
             this._playbackTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
                 if (!this._sink || !this.visible || !this._pipeline) return GLib.SOURCE_CONTINUE;
                 
+                // Track current active tracking timestamps dynamically
+                let [successPos, pos] = this._pipeline.query_position(Gst.Format.TIME);
+                if (successPos) this._currentTimeNs = pos;
+
+                let [successDur, dur] = this._pipeline.query_duration(Gst.Format.TIME);
+                if (successDur) this._durationNs = dur;
+
                 let sample = null;
                 try {
                     if (typeof this._sink.try_pull_sample === 'function') {
@@ -229,16 +462,9 @@ const GnomeLensVideoPreview = GObject.registerClass({
                     } else {
                         sample = this._sink.emit('try-pull-sample', 0);
                     }
-                } catch (e) {
-                    console.log(`[Gnome Lens Debug] Error pulling sample from appsink: ${e.message}`);
-                }
+                } catch (e) { }
                 
                 if (sample) {
-                    this._successfulSampleCount++;
-                    if (this._successfulSampleCount <= 5) {
-                        console.log(`[Gnome Lens Debug] Successfully pulled sample ${this._successfulSampleCount}`);
-                    }
-                    
                     if (this._idleRenderId === 0) {
                         this._idleRenderId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
                             this._idleRenderId = 0;
@@ -248,18 +474,13 @@ const GnomeLensVideoPreview = GObject.registerClass({
                             return GLib.SOURCE_REMOVE;
                         });
                     }
-                } else {
-                    this._emptySampleCount++;
-                    if (this._emptySampleCount <= 2) {
-                        console.log(`[Gnome Lens Debug] Pulled empty sample (null) ${this._emptySampleCount}`);
-                    }
                 }
                 
+                this._updateHUD();
                 return GLib.SOURCE_CONTINUE;
             });
             
         } catch (e) {
-            console.log(`[Gnome Lens Debug] GStreamer native initialization failed: ${e.message}`);
             this._extractFrameAndScheduleNext();
         }
     }
@@ -273,9 +494,7 @@ const GnomeLensVideoPreview = GObject.registerClass({
         let structure = caps.get_structure(0);
         if (!structure) return;
 
-        let width = 0;
-        let height = 0;
-
+        let width = 0, height = 0;
         try {
             let [successW, w] = structure.get_int('width');
             let [successH, h] = structure.get_int('height');
@@ -283,17 +502,6 @@ const GnomeLensVideoPreview = GObject.registerClass({
                 width = w; height = h;
             }
         } catch (e) { }
-
-        if (width <= 0 || height <= 0) {
-            let wRes = structure.get_value('width');
-            let hRes = structure.get_value('height');
-            if (wRes !== null && wRes !== undefined) {
-                width = typeof wRes === 'number' ? wRes : (typeof wRes.get_int === 'function' ? wRes.get_int() : parseInt(wRes));
-            }
-            if (hRes !== null && hRes !== undefined) {
-                height = typeof hRes === 'number' ? hRes : (typeof hRes.get_int === 'function' ? hRes.get_int() : parseInt(hRes));
-            }
-        }
         
         if (!width || !height || width <= 0 || height <= 0) return;
 
@@ -302,7 +510,7 @@ const GnomeLensVideoPreview = GObject.registerClass({
 
         let [isMapped, mapInfo] = buffer.map(Gst.MapFlags.READ);
         if (isMapped) {
-            let data = mapInfo.data; 
+            let data = mapInfo.data;
 
             if (!this._imageContent || this._contentWidth !== width || this._contentHeight !== height) {
                 if (typeof St.ImageContent.new_with_preferred_size === 'function') {
@@ -310,7 +518,6 @@ const GnomeLensVideoPreview = GObject.registerClass({
                 } else {
                     this._imageContent = new St.ImageContent();
                 }
-                
                 this._contentWidth = width;
                 this._contentHeight = height;
                 this._imageActor.set_content(this._imageContent);
@@ -322,7 +529,6 @@ const GnomeLensVideoPreview = GObject.registerClass({
             try {
                 let glibBytes = (data instanceof GLib.Bytes) ? data : new GLib.Bytes(data);
                 let coglCtx = null;
-                
                 try {
                     if (global.stage && global.stage.context) {
                         coglCtx = global.stage.context.get_backend().get_cogl_context();
@@ -338,20 +544,11 @@ const GnomeLensVideoPreview = GObject.registerClass({
                 } else {
                     bytesSuccess = this._imageContent.set_bytes(glibBytes, pixelFormat, width, height, width * 4);
                 }
-
-                if (this._successfulSampleCount === 1) {
-                    console.log(`[Gnome Lens Debug] Frame Extracted: w=${width}, h=${height}, Stride=${width*4}, FormatType=${pixelFormat}`);
-                }
-            } catch (err) {
-                console.log(`[Gnome Lens Debug] Rendering fail on sample ${this._successfulSampleCount}: ${err.message}`);
-            }
+            } catch (err) { }
             
-            if (!bytesSuccess && this._successfulSampleCount === 1) {
-                console.log('[Gnome Lens Debug] ALL rendering strategies failed for this frame.');
-            } else if (bytesSuccess) {
+            if (bytesSuccess) {
                 this._imageActor.queue_redraw();
             }
-            
             buffer.unmap(mapInfo);
         }
     }
@@ -361,16 +558,14 @@ const GnomeLensVideoPreview = GObject.registerClass({
             GLib.source_remove(this._playbackTimerId);
             this._playbackTimerId = 0;
         }
-        
         if (this._proc) {
             this._proc.force_exit();
             this._proc = null;
         }
         
+        let secondsCounter = Math.floor(this._currentTimeNs / 1000000000);
         let tempFile = GLib.build_filenamev([GLib.get_tmp_dir(), `gnome-lens-preview-${GLib.uuid_string_random()}.jpg`]);
-        let cmd = ['ffmpeg', '-y', '-ss', this._currentTime.toString(), '-i', this._filepath, '-vframes', '1', '-q:v', '2', '-vf', 'scale=640:-1', tempFile];
-
-        console.log(`[Gnome Lens Debug] Executing fallback frame extraction process command: ${cmd.join(' ')}`);
+        let cmd = ['ffmpeg', '-y', '-ss', secondsCounter.toString(), '-i', this._filepath, '-vframes', '1', '-q:v', '2', '-vf', 'scale=640:-1', tempFile];
 
         try {
             let proc = Gio.Subprocess.new(cmd, Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
@@ -388,11 +583,8 @@ const GnomeLensVideoPreview = GObject.registerClass({
                         return;
                     }
 
-                    this.set_child(new St.Widget({
-                        x_expand: true, y_expand: true,
-                        x_align: Clutter.ActorAlign.FILL, y_align: Clutter.ActorAlign.FILL,
-                        style: `background-image: url("file://${tempFile}"); background-size: contain; background-repeat: no-repeat; background-position: center;`
-                    }));
+                    this._imageActor.set_content(null);
+                    this._imageActor.style = `background-image: url("file://${tempFile}"); background-size: contain; background-repeat: no-repeat; background-position: center;`;
                     
                     if (this._lastTempFile) {
                         let lastFile = Gio.File.new_for_path(this._lastTempFile);
@@ -401,28 +593,20 @@ const GnomeLensVideoPreview = GObject.registerClass({
                         }
                     }
                     this._lastTempFile = tempFile;
-                } else {
-                    console.log(`[Gnome Lens Debug] Fallback extracted image file was not generated: ${tempFile}`);
-                    if (!isScrubbing && this._currentTime > 0) {
-                        this._currentTime = 0;
-                        this._extractFrameAndScheduleNext();
-                        return;
-                    }
                 }
                 
+                this._updateHUD();
+
+                // Setup ticking loops for processing offline steps
                 this._playbackTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
                     this._playbackTimerId = 0;
-                    this._currentTime += 1;
+                    this._currentTimeNs += 1000000000;
                     this._extractFrameAndScheduleNext();
                     return GLib.SOURCE_REMOVE;
                 });
             });
         } catch (e) {
-            console.log(`[Gnome Lens Debug] Subprocess frame generation handler exception: ${e.message}`);
             this._proc = null;
-            this._fallbackToSystemThumbnail();
         }
     }
 });
-
-export { GnomeLensVideoPreview };

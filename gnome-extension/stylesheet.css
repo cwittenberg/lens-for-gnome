@@ -389,3 +389,82 @@
 .lens-preview-resize-handle:hover {
     background-color: rgba(53, 132, 228, 0.6);
 }
+
+/* ========================================================================
+ * 8. VIDEO INTERACTIVE CONTROLS HUD
+ * ======================================================================== */
+.lens-video-container {
+    background-color: #000000;
+}
+
+.lens-video-hud {
+    background-image: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.4) 70%, rgba(0, 0, 0, 0) 100%);
+    padding: 8px 12px;
+    spacing: 12px;
+}
+
+.lens-video-control-btn {
+    color: rgba(255, 255, 255, 0.8);
+    border-radius: 6px;
+    padding: 4px 8px;
+    transition-duration: 150ms;
+}
+
+.lens-video-control-btn:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+}
+
+/* Scrubbing Track Elements */
+.lens-slider-track {
+    background-color: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    height: 6px;
+}
+
+.lens-slider-fill {
+    background-color: #3584e4; /* Overridden contextually if synthwave/nord active */
+    border-radius: 4px;
+    height: 6px;
+}
+
+/* Theme Adaptations for Scrubbing Fill */
+.lens-dialog[style*="background-image"] ~ .lens-layout .lens-slider-fill,
+.lens-dialog[class*="synthwave"] .lens-slider-fill {
+    background-color: #ff007f !important;
+}
+.lens-dialog[class*="nord"] .lens-slider-fill {
+    background-color: #88C0D0 !important;
+}
+.lens-dialog[class*="dracula"] .lens-slider-fill {
+    background-color: #bd93f9 !important;
+}
+.lens-dialog[class*="matrix"] .lens-slider-fill {
+    background-color: #00FF41 !important;
+}
+.lens-dialog[class*="cyberpunk"] .lens-slider-fill {
+    background-color: #FCE205 !important;
+}
+
+/* Volume Sub-Assembly */
+.lens-volume-box {
+    spacing: 6px;
+}
+
+.lens-volume-slider {
+    background-color: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+    height: 4px;
+}
+
+.lens-volume-fill {
+    background-color: rgba(255, 255, 255, 0.75);
+    border-radius: 3px;
+    height: 4px;
+}
+
+.lens-time-label {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 9pt;
+    font-family: monospace;
+}
