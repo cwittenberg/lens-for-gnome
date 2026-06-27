@@ -472,16 +472,6 @@ export const GnomeLensUI = GObject.registerClass({
         if (event.type() === Clutter.EventType.KEY_PRESS) {
             let symbol = event.get_key_symbol();
             
-            if (this._preview && this._preview.isVisible() && this._preview.isVideo()) {
-                if (symbol === Clutter.KEY_Right) {
-                    this._preview.scrub(5);
-                    return Clutter.EVENT_STOP;
-                } else if (symbol === Clutter.KEY_Left) {
-                    this._preview.scrub(-5);
-                    return Clutter.EVENT_STOP;
-                }
-            }
-            
             if (symbol === Clutter.KEY_Escape) {
                 this.close(true);
                 return Clutter.EVENT_STOP;

@@ -238,7 +238,6 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
                 iter.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
 
                 if (match) {
-                    // Prevent async overwrites if user continued typing
                     if (this._dirEntry.get_text() !== originalText) return;
 
                     let newText = originalText;
@@ -481,7 +480,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
         if (this._isClearing) return;
 
         let text = this._entry.get_text();
-        this._autocompleteActive = false; // Reset intercept flag if user typed
+        this._autocompleteActive = false;
 
         this._clearButton.visible = text.length > 0;
 
@@ -490,7 +489,6 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
         let cursorPos = this._entry.clutter_text.get_cursor_position();
 
-        // Check if we should fetch autocomplete for paths
         if (text !== this._lastText && text.length > this._lastText.length) {
             if (cursorPos === -1 || cursorPos === text.length) {
                 let lastToken = "";
@@ -569,7 +567,6 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
         let delay = 350;
         
-        // Instant search when they type a trailing slash for a directory
         if (isDirQuery && text.endsWith('/')) {
             delay = 0; 
         }
@@ -609,7 +606,6 @@ class GnomeLensSearchBar extends St.BoxLayout {
                 iter.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
 
                 if (match) {
-                    // Critical: if the user typed more while we were fetching asynchronously, abort
                     if (this._entry.get_text() !== originalText) {
                         return;
                     }
@@ -640,7 +636,19 @@ class GnomeLensSearchBar extends St.BoxLayout {
         let text = this._entry.get_text();
         let len = text.length;
 
-        // Catch active autocompletes
+        // INTERCEPT: When a video preview is active, capture Arrow Left and Arrow Right 
+        // keys directly inside the search textfield. Divert them to scrub the video 
+        // instead of shifting the text insertion cursor.
+        if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
+            if (symbol === Clutter.KEY_Right) {
+                if (this.callbacks.onScrub) this.callbacks.onScrub(5);
+                return Clutter.EVENT_STOP;
+            } else if (symbol === Clutter.KEY_Left) {
+                if (this.callbacks.onScrub) this.callbacks.onScrub(-5);
+                return Clutter.EVENT_STOP;
+            }
+        }
+
         if (this._autocompleteActive) {
             if (symbol === Clutter.KEY_Right || symbol === Clutter.KEY_End || symbol === Clutter.KEY_Tab || symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
                 this._autocompleteActive = false;
@@ -668,7 +676,6 @@ class GnomeLensSearchBar extends St.BoxLayout {
             return Clutter.EVENT_STOP;
         }
 
-        // Add Alt+Up for directory navigation
         if (symbol === Clutter.KEY_Up && (state & Clutter.ModifierType.MOD1_MASK)) {
             if (this._upButton.visible) {
                 this._navigateUpDirectory();
@@ -685,7 +692,6 @@ class GnomeLensSearchBar extends St.BoxLayout {
             return Clutter.EVENT_STOP;
         }
         
-        // Standard explicit search invocation
         if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
             if (this._debounceId > 0) {
                 GLib.source_remove(this._debounceId);

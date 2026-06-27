@@ -41,12 +41,16 @@ export const GnomeLensPreview = GObject.registerClass({
         this.set_position(x, y);
         this.set_size(w, h);
 
+        this._isDragging = false;
+        this._dragStartX = 0;
+        this._dragStartY = 0;
+        this._dragStartWinX = 0;
+        this._dragStartWinY = 0;
+
         this._buildUI();
 
-        // Halt native backdrop-injection propagation
         this.connectObject('button-press-event', () => Clutter.EVENT_STOP, this);
 
-        // Explicitly intercept scroll-events at the parent root container level
         this.connectObject('scroll-event', (actor, event) => {
             if (this.isVideo() && this._activeStrategy) {
                 let direction = event.get_scroll_direction();
@@ -57,10 +61,10 @@ export const GnomeLensPreview = GObject.registerClass({
                 } else if (direction === Clutter.ScrollDirection.DOWN) {
                     delta = -5;
                 } else if (direction === Clutter.ScrollDirection.SMOOTH) {
-                    let [dx, dy] = event.get_scroll_deltas();
+                    // FIX: Clutter.Event does not expose a native get_scroll_deltas() method binding in GJS.
+                    // Instead, we use the correct GObject property event.get_scroll_delta() which returns [dx, dy].
+                    let [dx, dy] = event.get_scroll_delta();
                     if (dy !== 0) {
-                        // Accumulate continuous smooth scroll events proportionally 
-                        // rather than fixed 5s jumps to prevent over-seeking
                         delta = -dy * 5; 
                     }
                 }
@@ -94,71 +98,73 @@ export const GnomeLensPreview = GObject.registerClass({
         });
         this.add_child(this._resizeHandle);
 
-        let dragging = false;
-        let startX, startY, startWinX, startWinY;
         this.isFullscreen = false;
         this._preFsGeom = { x: 0, y: 0, w: 0, h: 0 };
 
-        this.connectObject('captured-event', (actor, event) => {
-            let type = event.type();
-            let source = event.get_source();
-            
-            // Centralized HUD wake-up: intercept all interactions over the window and wake the video HUD
-            if (this.isVideo() && this._activeStrategy && typeof this._activeStrategy._resetHideTimer === 'function') {
-                if (type === Clutter.EventType.MOTION || type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.SCROLL) {
-                    this._activeStrategy._resetHideTimer();
-                }
-            }
-            
-            // Refined drag interception check: only restrict drag if the click landed explicitly on control HUD sub-widgets
-            let isControl = false;
-            let current = source;
-            while (current && current !== this) {
-                let cls = current.get_style_class_name ? current.get_style_class_name() : '';
-                if (cls && (cls.includes('hud') || cls.includes('resize-handle') || cls.includes('btn') || cls.includes('slider') || cls.includes('track') || cls.includes('fill'))) {
-                    isControl = true;
-                    break;
-                }
-                current = current.get_parent();
-            }
-
-            if (type === Clutter.EventType.BUTTON_PRESS) {
+        // Handle dragging directly on the component via safe internal pointer propagation tracking
+        this.connectObject(
+            'button-press-event', (actor, event) => {
                 if (event.get_button() !== 1) return Clutter.EVENT_PROPAGATE;
 
+                let source = event.get_source();
+                let isControl = false;
+                let current = source;
+                while (current && current !== this) {
+                    let cls = current.get_style_class_name ? current.get_style_class_name() : '';
+                    if (cls && (cls.includes('hud') || cls.includes('resize-handle') || cls.includes('btn') || cls.includes('slider') || cls.includes('track') || cls.includes('fill'))) {
+                        isControl = true;
+                        break;
+                    }
+                    current = current.get_parent();
+                }
+
                 if (event.get_click_count() === 2 && !isControl) {
-                    dragging = false;
                     this.toggleFullscreen();
                     return Clutter.EVENT_STOP;
                 }
 
                 if (!isControl && !this.isFullscreen) {
-                    dragging = true;
                     let [x, y] = event.get_coords();
-                    startX = x; startY = y;
-                    startWinX = this.x; startWinY = this.y;
-                    
-                    // Propagate the press down to the window boundary so Clutter establishes 
-                    // an implicit grab on this parent window, securing reliable drags.
-                    return Clutter.EVENT_PROPAGATE;
-                }
-            } else if (type === Clutter.EventType.MOTION) {
-                if (dragging) {
-                    let [x, y] = event.get_coords();
-                    this.set_position(startWinX + (x - startX), startWinY + (y - startY));
+                    this._isDragging = true;
+                    this._dragStartX = x;
+                    this._dragStartY = y;
+                    this._dragStartWinX = this.x;
+                    this._dragStartWinY = this.y;
                     return Clutter.EVENT_STOP;
                 }
-            } else if (type === Clutter.EventType.BUTTON_RELEASE) {
-                if (dragging) {
-                    dragging = false;
+                return Clutter.EVENT_PROPAGATE;
+            },
+            'motion-event', (actor, event) => {
+                if (this.isVideo() && this._activeStrategy && typeof this._activeStrategy._resetHideTimer === 'function') {
+                    this._activeStrategy._resetHideTimer();
+                }
+
+                if (!this._isDragging) return Clutter.EVENT_PROPAGATE;
+
+                let [x, y] = event.get_coords();
+                let deltaX = x - this._dragStartX;
+                let deltaY = y - this._dragStartY;
+
+                this.set_position(
+                    this._dragStartWinX + deltaX,
+                    this._dragStartWinY + deltaY
+                );
+                return Clutter.EVENT_STOP;
+            },
+            'button-release-event', (actor, event) => {
+                if (event.get_button() !== 1) return Clutter.EVENT_PROPAGATE;
+                if (this._isDragging) {
+                    this._isDragging = false;
                     this._saveGeometry();
                     return Clutter.EVENT_STOP;
                 }
-            }
-            return Clutter.EVENT_PROPAGATE;
-        }, this);
+                return Clutter.EVENT_PROPAGATE;
+            },
+            this
+        );
 
         let resizing = false;
-        let startW, startH;
+        let startX, startY, startW, startH;
         this._resizeHandle.connectObject('button-press-event', (actor, event) => {
             if (this.isFullscreen) return Clutter.EVENT_STOP;
             resizing = true;
@@ -221,7 +227,6 @@ export const GnomeLensPreview = GObject.registerClass({
     showFile(filepath, type) {
         if (this._filepath === filepath && this.visible) return;
         
-        // Before clearing active state, tell the strategy to instantly save position
         if (this._activeStrategy && typeof this._activeStrategy.saveCurrentPosition === 'function') {
             this._activeStrategy.saveCurrentPosition();
         }

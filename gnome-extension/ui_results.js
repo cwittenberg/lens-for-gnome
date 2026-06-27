@@ -34,11 +34,9 @@ class GnomeLensResultsList extends St.ScrollView {
         });
         
         this.add_child(this._resultsBox);
-        
-        this.connectObject('key-press-event', this._onKeyPressEvent.bind(this), this);
     }
 
-    _onKeyPressEvent(actor, keyEvent) {
+    vfunc_key_press_event(keyEvent) {
         let symbol = keyEvent.get_key_symbol();
         
         // INTERCEPT: If a video preview is active, pass arrow keys down instead of swallowing them
@@ -68,7 +66,7 @@ class GnomeLensResultsList extends St.ScrollView {
             this.launchSelected();
             return Clutter.EVENT_STOP;
         }
-        return Clutter.EVENT_PROPAGATE;
+        return super.vfunc_key_press_event(keyEvent);
     }
 
     getResults() {
