@@ -17,16 +17,25 @@ class AIEngineManager {
     }
 
     buildUI() {
-        this.statusGroup = new Adw.PreferencesGroup({ title: 'Service Status' });
-        this.statusRow = new Adw.ActionRow({ title: '  Connecting...', subtitle: 'Pinging IPC socket...' });
+        // Persistent Hardware Status Group
+        this.hwGroup = new Adw.PreferencesGroup({ title: 'Hardware Optimization' });
+        this.hwStatusRow = new Adw.ActionRow({ 
+             title: 'Detecting...', 
+             subtitle: 'Querying backend for hardware capabilities...' 
+         });
+        this.hwGroup.add(this.hwStatusRow);
+        this.page.add(this.hwGroup);
+
+        // Transient Operations Group (Hidden when idle)
+        this.opGroup = new Adw.PreferencesGroup({ visible: false });
+        this.opStatusRow = new Adw.ActionRow({ title: 'Processing...' });
         
         this.spinner = new Gtk.Spinner({
             valign: Gtk.Align.CENTER,
             visible: false
         });
-        this.statusRow.add_suffix(this.spinner);
-        
-        this.statusGroup.add(this.statusRow);
+        this.opStatusRow.add_suffix(this.spinner);
+        this.opGroup.add(this.opStatusRow);
 
         this.progressBox = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
@@ -54,16 +63,11 @@ class AIEngineManager {
 
         this.progressBox.append(this.progressBar);
         this.progressBox.append(this.cancelButton);
-        this.statusGroup.add(this.progressBox);
+        this.opGroup.add(this.progressBox);
 
-        this.hwStatusRow = new Adw.ActionRow({ 
-             title: '  Hardware Optimization', 
-             subtitle: 'Detecting...' 
-         });
-        this.statusGroup.add(this.hwStatusRow);
+        this.page.add(this.opGroup);
 
-        this.page.add(this.statusGroup);
-
+        // Model Selection Group
         this.modelGroup = new Adw.PreferencesGroup({  
              title: 'Available AI Models', 
              description: 'Fetching configurations...' 
@@ -82,7 +86,6 @@ class AIEngineManager {
         socketClient.connect_async(address, cancellable, (client, res) => {
             try {
                 let connection = client.connect_finish(res);
-                this.statusRow.set_title('  Service Online');
                 
                 let outputStream = connection.get_output_stream();
                 let inputStream = new Gio.DataInputStream({ base_stream: connection.get_input_stream() });
@@ -100,11 +103,12 @@ class AIEngineManager {
                 });
             } catch (e) {
                 if (!cancellable.is_cancelled()) {
-                    this.statusRow.set_title('  Service Offline');
-                    this.statusRow.set_subtitle('Is the rust background service running?');
-                    this.hwStatusRow.set_subtitle('Service unreachable.');
+                    this.hwStatusRow.set_title('Service Offline');
+                    this.hwStatusRow.set_subtitle('Start the background daemon in the Indexation tab to view AI settings.');
                     this.spinner.stop();
                     this.spinner.set_visible(false);
+                    this.opGroup.set_visible(false);
+                    this.modelGroup.set_description('Cannot fetch models while service is offline.');
                 }
             }
         });
@@ -140,13 +144,13 @@ class AIEngineManager {
 
     _cleanupConnection(inputStream, outputStream, connection) {
         if (inputStream) {
-            try { inputStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {}); } catch(e) {}
+            inputStream.close_async(GLib.PRIORITY_DEFAULT, null, null);
         }
         if (outputStream) {
-            try { outputStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {}); } catch(e) {}
+            outputStream.close_async(GLib.PRIORITY_DEFAULT, null, null);
         }
         if (connection) {
-            try { connection.close_async(GLib.PRIORITY_DEFAULT, null, () => {}); } catch(e) {}
+            connection.close_async(GLib.PRIORITY_DEFAULT, null, null);
         }
     }
 
@@ -159,8 +163,9 @@ class AIEngineManager {
         this.spinner.stop();
         this.spinner.set_visible(false);
         this.progressBox.set_visible(false);
-        this.statusRow.set_title('  Operation Cancelled');
-        this.statusRow.set_subtitle('Connecting...');
+        
+        this.opStatusRow.set_title('Operation Cancelled');
+        this.opStatusRow.set_subtitle('');
 
         let t = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
             this.requestConfig();
@@ -170,15 +175,17 @@ class AIEngineManager {
     }
 
     requestConfig() {
+        this.opGroup.set_visible(true);
         this.spinner.set_visible(true);
         this.spinner.start();
-        this.statusRow.set_subtitle('Synchronizing...');
+        this.opStatusRow.set_title('Synchronizing...');
+        this.opStatusRow.set_subtitle('Fetching configuration...');
         
         this._sendPayload({ action: 'get_config' }, (data) => {
             if (data.status === 'config_data') {
                 this.spinner.stop();
                 this.spinner.set_visible(false);
-                this.statusRow.set_subtitle('Ready.');
+                this.opGroup.set_visible(false);
                 this._renderModels(data.data);
             }
         });
@@ -189,10 +196,10 @@ class AIEngineManager {
             if (data.status === 'hardware_data') {
                 let hw = data.data;
                 if (hw.is_hardware_dedicated && hw.acceleration_type !== 'CPU') {
-                    this.hwStatusRow.set_title(`  Active: ${hw.acceleration_type} Acceleration`);
+                    this.hwStatusRow.set_title(`Active: ${hw.acceleration_type} Acceleration`);
                     this.hwStatusRow.set_subtitle(`${hw.device_name} (via ${hw.api})`);
                 } else {
-                    this.hwStatusRow.set_title('  Active: CPU Mode (Software)');
+                    this.hwStatusRow.set_title('Active: CPU Mode (Software)');
                     this.hwStatusRow.set_subtitle('No dedicated hardware acceleration detected.');
                 }
             }
@@ -204,21 +211,21 @@ class AIEngineManager {
             btn.set_sensitive(false);
         }
 
+        this.opGroup.set_visible(true);
         this.spinner.set_visible(true);
         this.spinner.start();
-        this.statusRow.set_title('  Deleting Model...');
-        this.statusRow.set_subtitle('Removing model files from disk.');
+        this.opStatusRow.set_title('Deleting Model...');
+        this.opStatusRow.set_subtitle('Removing model files from disk.');
 
         this._sendPayload({ action: 'delete_model', model_id: modelId }, (data) => {
             if (data.status === 'done') {
-                this.statusRow.set_title('  Service Online');
-                this.statusRow.set_subtitle('Model removed successfully.');
+                this.opGroup.set_visible(false);
                 this.requestConfig();
             } else if (data.status === 'error') {
                 this.spinner.stop();
                 this.spinner.set_visible(false);
-                this.statusRow.set_title('  Engine Error');
-                this.statusRow.set_subtitle(data.message);
+                this.opStatusRow.set_title('Engine Error');
+                this.opStatusRow.set_subtitle(data.message);
                 this.requestConfig();
             }
         });
@@ -229,35 +236,35 @@ class AIEngineManager {
             btn.set_sensitive(false);
         }
         
+        this.opGroup.set_visible(true);
         this.spinner.set_visible(true);
         this.spinner.start();
         this.progressBox.set_visible(false);
         this.progressBar.set_fraction(0.0);
         
-        this.statusRow.set_title('  Executing Model Hotswap...');
-        this.statusRow.set_subtitle('This may take several minutes if a download is required. Do not close this window.');
+        this.opStatusRow.set_title('Executing Model Hotswap...');
+        this.opStatusRow.set_subtitle('This may take several minutes if a download is required. Do not close this window.');
         
         this._sendPayload({ action: 'update_config', key: 'active_model', value: modelId }, (data) => {
             if (data.status === 'processing') {
-                this.statusRow.set_subtitle(data.message);
+                this.opStatusRow.set_subtitle(data.message);
             } else if (data.status === 'downloading') {
-                this.statusRow.set_subtitle('Downloading Model...');
+                this.opStatusRow.set_subtitle('Downloading Model...');
                 this.progressBox.set_visible(true);
                 let fraction = data.progress / 100.0;
                 if (fraction >= 0.0 && fraction <= 1.0) {
                     this.progressBar.set_fraction(fraction);
                 }
             } else if (data.status === 'done') {
-                this.statusRow.set_title('  Service Online');
-                this.statusRow.set_subtitle(data.message || 'Ready.');
+                this.opGroup.set_visible(false);
                 this.progressBox.set_visible(false);
                 this.requestConfig();
             } else if (data.status === 'error') {
                 this.spinner.stop();
                 this.spinner.set_visible(false);
                 this.progressBox.set_visible(false);
-                this.statusRow.set_title('  Engine Error');
-                this.statusRow.set_subtitle(data.message);
+                this.opStatusRow.set_title('Engine Error');
+                this.opStatusRow.set_subtitle(data.message);
                 this.requestConfig();
             }
         });

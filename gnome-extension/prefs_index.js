@@ -267,8 +267,63 @@ export function buildIndexPage(settings, window) {
     serviceGroup.add(statusRow);
     page.add(serviceGroup);
 
-    let healthCheckId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
+    // ==========================================
+    // LIVE INGESTION PROGRESS TRACKER
+    // ==========================================
+    const progressGroup = new Adw.PreferencesGroup({ title: 'Live Ingestion Progress' });
+    const progressRow = new Adw.ActionRow({ title: 'Idle', subtitle: 'System is resting or listening for changes.' });
+    
+    const progressBox = new Gtk.Box({
+        orientation: Gtk.Orientation.HORIZONTAL,
+        spacing: 12,
+        margin_top: 12,
+        margin_bottom: 12,
+        margin_start: 12,
+        margin_end: 12,
+        visible: false
+    });
+    const progressBar = new Gtk.ProgressBar({
+        hexpand: true,
+        valign: Gtk.Align.CENTER
+    });
+    progressBar.set_inverted(false);
+    progressBox.append(progressBar);
+
+    progressGroup.add(progressRow);
+    progressGroup.add(progressBox);
+    page.add(progressGroup);
+
+    let healthCheckId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
         updateServiceUI(true);
+        
+        sendDaemonCommand({ action: 'get_indexer_status' }, (data) => {
+            if (data.status === 'indexer_status' && data.data) {
+                let state = data.data;
+                if (state.is_running) {
+                    progressBox.set_visible(true);
+                    
+                    let processed = state.deep_processed + state.shallow_processed;
+                    let total = state.total_files || 0;
+                    
+                    if (total > 0) {
+                        let fraction = processed / total;
+                        if (fraction > 1.0) fraction = 1.0;
+                        progressBar.set_fraction(fraction);
+                        progressRow.set_title(`Indexing: ${Math.round(fraction * 100)}%`);
+                        progressRow.set_subtitle(`Processed: ${processed} / ${total} (Deep: ${state.deep_processed}, Shallow: ${state.shallow_processed})`);
+                    } else {
+                        progressBar.pulse();
+                        progressRow.set_title('Scanning Filesystem...');
+                        progressRow.set_subtitle('Calculating missing and modified files...');
+                    }
+                } else {
+                    progressBox.set_visible(false);
+                    progressBar.set_fraction(0.0);
+                    progressRow.set_title('Idle');
+                    progressRow.set_subtitle('System is resting or listening for real-time changes.');
+                }
+            }
+        });
         return GLib.SOURCE_CONTINUE;
     });
 

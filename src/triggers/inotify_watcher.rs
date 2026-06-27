@@ -18,6 +18,11 @@ pub struct INotifyTrigger;
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(500);
 const RX_IDLE_TICK: Duration = Duration::from_millis(100);
 
+enum WatchMessage {
+    WatchDir(PathBuf),
+    Done(String),
+}
+
 /// Checks if the immediate file or folder is hidden.
 /// Explicitly ignores GTK's temporary save files to prevent massive parent directory re-walks.
 fn is_hidden(path: &Path) -> bool {
@@ -129,6 +134,7 @@ impl IndexTrigger for INotifyTrigger {
     fn start(&self, target_dirs: Vec<String>, max_depth: usize, pipeline: Arc<IngestionPipeline>) {
         thread::spawn(move || {
             let (tx, rx) = mpsc::channel();
+            let (watch_tx, watch_rx) = mpsc::channel::<WatchMessage>();
             
             let mut watcher = RecommendedWatcher::new(
                 move |res| { if let Ok(e) = res { let _ = tx.send(e); } },
@@ -159,16 +165,69 @@ impl IndexTrigger for INotifyTrigger {
                 });
             }
 
-            // 2. Initial Setup (Fast Watch Placement)
-            // We skip indexing here because the dedicated Rayon pipeline thread is already 
-            // doing the heavy lifting. We just need to place the kernel watches instantly.
-            for dir in &target_dirs {
-                process_path(&mut watcher, &mut watched, Path::new(dir), max_depth, &pipeline, &base_paths, &raw_base_paths, true);
-                println!("  -> Kernel watching active on: {} (Max Depth: {})", dir, max_depth);
-            }
+            // 2. Async Initial Setup (Streaming Watch Placement)
+            // We spawn a separate thread to walk the directories because doing it synchronously 
+            // blocks the inotify event loop, causing it to miss real-time events while scanning large NAS mounts.
+            let target_dirs_clone = target_dirs.clone();
+            let base_paths_clone = base_paths.clone();
+            let raw_base_paths_clone = raw_base_paths.clone();
+            
+            thread::spawn(move || {
+                for dir in target_dirs_clone {
+                    let path = Path::new(&dir);
+                    if !path.exists() || is_hidden(path) { 
+                        let _ = watch_tx.send(WatchMessage::Done(dir.clone()));
+                        continue; 
+                    }
+                    
+                    let root_depth = match get_depth(path, &base_paths_clone, &raw_base_paths_clone) {
+                        Some(d) if d <= max_depth => d,
+                        _ => {
+                            let _ = watch_tx.send(WatchMessage::Done(dir.clone()));
+                            continue;
+                        }
+                    };
+                    
+                    let remaining_depth = max_depth - root_depth;
+                    for entry in WalkDir::new(path).max_depth(remaining_depth).follow_links(true).into_iter().flatten() {
+                        let sub_path = entry.path();
+                        if !is_hidden(sub_path) && sub_path.is_dir() {
+                            let _ = watch_tx.send(WatchMessage::WatchDir(sub_path.to_path_buf()));
+                        }
+                    }
+                    
+                    // Send a completion marker to print the log accurately once the directory walk is fully complete
+                    let _ = watch_tx.send(WatchMessage::Done(dir.clone()));
+                }
+            });
 
             // 3. Event Loop
             loop {
+                // 3a. Drain pending watches from the background scanner
+                // Limit the batch size per tick to ensure the event loop remains responsive 
+                // to live real-time file events even while the background scanner is catching up.
+                let mut watch_batch = 0;
+                while let Ok(msg) = watch_rx.try_recv() {
+                    match msg {
+                        WatchMessage::WatchDir(new_dir) => {
+                            let sub_key = new_dir.canonicalize().unwrap_or_else(|_| new_dir.clone());
+                            if watched.insert(sub_key) {
+                                let _ = watcher.watch(&new_dir, RecursiveMode::NonRecursive);
+                            }
+                            watch_batch += 1;
+                        },
+                        WatchMessage::Done(dir_str) => {
+                            println!("  -> Kernel watching active on: {} (Max Depth: {})", dir_str, max_depth);
+                        }
+                    }
+                    
+                    // Yield back to the kernel event drainer if we've processed a large chunk
+                    if watch_batch >= 500 {
+                        break;
+                    }
+                }
+
+                // 3b. Poll kernel events
                 match rx.recv_timeout(RX_IDLE_TICK) {
                     Ok(Event { kind, paths, .. }) => {
                         // Broadly capture all modification, creation, rename, and deletion events

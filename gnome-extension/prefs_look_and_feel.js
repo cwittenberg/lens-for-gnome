@@ -2,6 +2,7 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
+import Gdk from 'gi://Gdk';
 
 export function buildLookAndFeelPage(settings, window) {
     const page = new Adw.PreferencesPage({
@@ -49,18 +50,47 @@ export function buildLookAndFeelPage(settings, window) {
     // ==========================================
     const uiGroup = new Adw.PreferencesGroup({ title: 'Window Appearance' });
 
-    const colorRow = new Adw.EntryRow({
-        title: 'Background Color (Hex)',
-        text: settings.get_string('ui-color')
+    const colorRow = new Adw.ActionRow({
+        title: 'Background Color',
+        subtitle: 'Select a custom background color for the search window.',
     });
-    colorRow.connect('apply', () => {
-        let text = colorRow.get_text().trim();
-        if (/^#[0-9A-Fa-f]{6}$/.test(text)) {
-            settings.set_string('ui-color', text);
-        } else {
-            colorRow.set_text(settings.get_string('ui-color')); // revert on invalid hex
-        }
-    });
+
+    let initialHex = settings.get_string('ui-color');
+    let rgba = new Gdk.RGBA();
+    rgba.parse(initialHex);
+
+    let colorButton;
+    if (Gtk.ColorDialogButton) {
+        let colorDialog = new Gtk.ColorDialog();
+        colorButton = new Gtk.ColorDialogButton({
+            dialog: colorDialog,
+            rgba: rgba,
+            valign: Gtk.Align.CENTER
+        });
+        colorButton.connect('notify::rgba', () => {
+            let c = colorButton.get_rgba();
+            let r = Math.round(c.red * 255).toString(16).padStart(2, '0');
+            let g = Math.round(c.green * 255).toString(16).padStart(2, '0');
+            let b = Math.round(c.blue * 255).toString(16).padStart(2, '0');
+            settings.set_string('ui-color', `#${r}${g}${b}`);
+        });
+    } else {
+        colorButton = new Gtk.ColorButton({
+            rgba: rgba,
+            use_alpha: false,
+            valign: Gtk.Align.CENTER
+        });
+        colorButton.connect('color-set', () => {
+            let c = colorButton.get_rgba();
+            let r = Math.round(c.red * 255).toString(16).padStart(2, '0');
+            let g = Math.round(c.green * 255).toString(16).padStart(2, '0');
+            let b = Math.round(c.blue * 255).toString(16).padStart(2, '0');
+            settings.set_string('ui-color', `#${r}${g}${b}`);
+        });
+    }
+
+    colorRow.add_suffix(colorButton);
+    colorRow.set_activatable_widget(colorButton);
     uiGroup.add(colorRow);
 
     const transRow = new Adw.SpinRow({

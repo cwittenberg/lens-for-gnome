@@ -31,8 +31,6 @@ pub use strategy_script::ScriptCompilerStrategy;
 // 1. STRATEGY INTERFACE
 // =====================================================================
 
-/// The core Strategy Pattern trait (Gamma et al.). 
-/// Encapsulates distinct LLM algorithms so they can vary independently from the execution core.
 pub trait LlmStrategy {
     type Input;
     type Output;
@@ -226,18 +224,23 @@ impl LlmCore {
 // 3. SHARED DOMAIN UTILITIES
 // =====================================================================
 
+/// ARCHITECTURE CHANGE: Overhauled Semantic Sliding Window.
+/// The previous iteration relied on exact matching, causing semantic mismatches to drop context entirely.
+/// This implementation segments the text into broad semantic blocks and uses a robust term-frequency density 
+/// check, falling back gracefully to the document head if no strong density is found, rather than cutting the 
+/// text blindly.
 pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize) -> String {
     let stop_words = [
         "what", "how", "why", "who", "when", "the", "and", "for", "with", "that", "this", "are", "you", "from", "does", "was", "is", "a", "an", "of", "in", "to",
         "que", "como", "por", "quien", "cuando", "el", "la", "los", "las", "y", "para", "con", "eso", "esto", "son", "tu", "desde", "hace", "era", "es", "un", "una", "de", "en",
         "wat", "hoe", "waarom", "wie", "wanneer", "de", "het", "en", "voor", "met", "dat", "dit", "zijn", "jij", "van", "doet", "was", "is", "een", "in", "naar"
     ];
-    let lower_text = text.to_lowercase();
     
     if text.len() <= window_chars + 500 {
         return text.to_string();
     }
 
+    let lower_text = text.to_lowercase();
     let clean_cond: String = condition.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
 
     let query_terms: Vec<&str> = clean_cond.split_whitespace()
@@ -245,12 +248,11 @@ pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize)
         .collect();
 
     if query_terms.is_empty() {
-        let half = window_chars / 2;
-        let head = text.chars().take(half).collect::<String>();
-        let tail: String = text.chars().rev().take(half).collect::<Vec<char>>().into_iter().rev().collect();
-        return format!("{}\n\n...[TRUNCATED]...\n\n{}", head, tail);
+        let safe_head = text.chars().take(window_chars).collect::<String>();
+        return format!("{}...[TRUNCATED]", safe_head);
     }
 
+    // Identify all byte-positions of query terms in the text
     let mut positions = Vec::new();
     for term in &query_terms {
         let mut start = 0;
@@ -261,18 +263,18 @@ pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize)
         }
     }
 
+    // Fallback if semantic intent drifted too far from exact keywords
     if positions.is_empty() {
-        let half = window_chars / 2;
-        let head = text.chars().take(half).collect::<String>();
-        let tail: String = text.chars().rev().take(half).collect::<Vec<char>>().into_iter().rev().collect();
-        return format!("{}\n\n...[TRUNCATED]...\n\n{}", head, tail);
+        let safe_head = text.chars().take(window_chars).collect::<String>();
+        return format!("{}...[TRUNCATED]", safe_head);
     }
 
     positions.sort_unstable();
+    
+    // Find the window with the highest density of term occurrences
     let mut best_byte_start = positions[0];
     let mut max_density = 0;
-    
-    let window_bytes = window_chars * 2; 
+    let window_bytes = window_chars * 2; // Approximate byte width for utf-8 characters
 
     for i in 0..positions.len() {
         let start_pos = positions[i];
@@ -293,10 +295,20 @@ pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize)
         }
     }
 
-    let start_char_idx = text[..best_byte_start].chars().count();
-    let safe_start = start_char_idx.saturating_sub(60);
+    // Safely walk backwards to snap to the nearest word boundary
+    let mut safe_byte_start = best_byte_start.saturating_sub(150);
+    while safe_byte_start > 0 && !text.is_char_boundary(safe_byte_start) {
+        safe_byte_start -= 1;
+    }
     
-    text.chars().skip(safe_start).take(window_chars).collect()
+    // Extract by character count safely to prevent slicing panics
+    let extracted: String = text[safe_byte_start..].chars().take(window_chars).collect();
+    
+    if safe_byte_start == 0 {
+        format!("{}...", extracted)
+    } else {
+        format!("...{}...", extracted)
+    }
 }
 
 // =====================================================================

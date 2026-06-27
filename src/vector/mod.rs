@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use crate::domain::SearchResult;
 use std::path::Path;
-use rayon::prelude::*;
 
 #[derive(Clone)]
 pub struct CachedDoc {
@@ -325,6 +324,56 @@ impl VectorStore {
         });
     }
 
+    pub fn insert_documents(&self, documents: Vec<(String, String, Vec<f32>, u64, HashMap<String, String>)>) {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        conn.execute("BEGIN TRANSACTION", []).ok();
+
+        for (path, content, embedding, modified_at, metadata) in &documents {
+            let metadata_json = serde_json::to_string(&metadata).unwrap_or_else(|_| "{}".to_string());
+            let embedding_blob = Self::f32_to_bytes(embedding);
+            
+            let filename = Path::new(path).file_name().unwrap_or_default().to_string_lossy().to_string();
+
+            if let Err(e) = conn.execute(
+                "INSERT INTO documents (id, modified_at, metadata, embedding) 
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(id) DO UPDATE SET 
+                     modified_at=excluded.modified_at,
+                     metadata=excluded.metadata,
+                     embedding=excluded.embedding",
+                params![path, modified_at, metadata_json, embedding_blob],
+            ) {
+                eprintln!("[Database] Failed to insert document metadata for {}: {}", path, e);
+                continue;
+            }
+
+            conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![path]).ok();
+            
+            if let Err(e) = conn.execute(
+                "INSERT INTO documents_fts (id, filename, content_text) VALUES (?1, ?2, ?3)",
+                params![path, filename, content],
+            ) {
+                eprintln!("[Database] Failed to update FTS5 index for {}: {}", path, e);
+            }
+        }
+
+        conn.execute("COMMIT", []).ok();
+
+        let mut cache_guard = self.cache.write().unwrap();
+        for (path, _content, embedding, modified_at, metadata) in documents {
+            cache_guard.insert(path.clone(), CachedDoc {
+                id: path,
+                modified_at,
+                metadata,
+                embedding,
+            });
+        }
+    }
+
     pub fn search(
         &self, 
         target_embedding: &[f32], 
@@ -420,7 +469,7 @@ impl VectorStore {
 
         let cache_guard = self.cache.read().unwrap();
 
-        let mut candidate_scores: Vec<(String, f32, Option<String>, Option<String>)> = cache_guard.par_iter()
+        let mut candidate_scores: Vec<(String, f32, Option<String>, Option<String>)> = cache_guard.iter()
             .filter(|(_, doc)| {
                 if is_dummy_vector && !fts_matches.contains_key(&doc.id) {
                     return false;

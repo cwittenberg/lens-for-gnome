@@ -11,6 +11,7 @@ pub mod eml;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -28,12 +29,64 @@ pub trait FileExtractor: Send + Sync {
     fn extract(&self, path: &Path) -> Result<String, String>;
 }
 
+// Ingestor Active Status Container Block
+pub struct IndexerProgressState {
+    pub is_running: Arc<AtomicBool>,
+    pub current_target: Arc<Mutex<String>>,
+    pub deep_processed: Arc<AtomicUsize>,
+    pub shallow_processed: Arc<AtomicUsize>,
+    pub total_files: Arc<AtomicUsize>,
+    config_dir: String,
+    write_lock: Arc<Mutex<()>>,
+}
+
+impl IndexerProgressState {
+    pub fn new(config_dir: &str) -> Self {
+        Self {
+            is_running: Arc::new(AtomicBool::new(false)),
+            current_target: Arc::new(Mutex::new(String::new())),
+            deep_processed: Arc::new(AtomicUsize::new(0)),
+            shallow_processed: Arc::new(AtomicUsize::new(0)),
+            total_files: Arc::new(AtomicUsize::new(0)),
+            config_dir: config_dir.to_string(),
+            write_lock: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn write_flush(&self) {
+        let _lock = match self.write_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let file_path = Path::new(&self.config_dir).join("indexer_state.json");
+        let temp_path = Path::new(&self.config_dir).join(format!("indexer_state_{}.tmp", std::process::id()));
+        
+        let current_target = match self.current_target.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+
+        let payload = serde_json::json!({
+            "is_running": self.is_running.load(Ordering::Relaxed),
+            "current_target": current_target,
+            "deep_processed": self.deep_processed.load(Ordering::Relaxed),
+            "shallow_processed": self.shallow_processed.load(Ordering::Relaxed),
+            "total_files": self.total_files.load(Ordering::Relaxed)
+        });
+        
+        if std::fs::write(&temp_path, payload.to_string()).is_ok() {
+            let _ = std::fs::rename(&temp_path, &file_path);
+        }
+    }
+}
+
 pub struct IngestionPipeline {
     store: Arc<VectorStore>,
     ai_model: Mutex<TextEmbedding>,
     extractors: Vec<Box<dyn FileExtractor>>,
     domain_keywords: HashMap<String, Vec<String>>,
     blacklist: Vec<String>,
+    pub progress: IndexerProgressState,
 }
 
 impl IngestionPipeline {
@@ -47,6 +100,7 @@ impl IngestionPipeline {
 
         let config_path = format!("{}/domains.json", config_dir);
         let domain_keywords = Self::load_or_create_config(&config_path);
+        let progress = IndexerProgressState::new(config_dir);
 
         Self {
             store,
@@ -64,6 +118,7 @@ impl IngestionPipeline {
             ],
             domain_keywords,
             blacklist,
+            progress,
         }
     }
 
@@ -210,7 +265,6 @@ impl IngestionPipeline {
     }
 
     pub fn remove_file(&self, path: &Path) {
-        // SECURE: Use canonical path for database lookup to ensure exact match
         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let path_str = canonical_path.to_string_lossy().to_string();
         self.store.delete_document(&path_str);
@@ -219,13 +273,12 @@ impl IngestionPipeline {
         }
     }
 
-    pub fn index_file(&self, path: &Path) {
-        if !path.exists() { return; }
-
-        let is_dir = path.is_dir();
-        if !is_dir && !path.is_file() { return; }
+    fn prepare_document(&self, path: &Path) -> Option<(String, String, bool, u64, HashMap<String, String>)> {
+        if !path.exists() { return None; }
         
-        // SECURE: Force canonicalization so DB IDs always match WalkDir and INotify paths
+        let is_dir = path.is_dir();
+        if !is_dir && !path.is_file() { return None; }
+        
         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let path_str = canonical_path.to_string_lossy().to_string();
 
@@ -236,11 +289,9 @@ impl IngestionPipeline {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64);
 
-        // FAST BYPASS: Skip instantly if DB timestamp equals current disk timestamp
         if let Some(db_modified) = self.store.get_document_modified_at(&path_str) {
-            // Protect against schema resets where db_modified was forced to 0
             if modified_at <= db_modified && db_modified != 0 {
-                return; 
+                return None; 
             }
         }
 
@@ -270,7 +321,6 @@ impl IngestionPipeline {
 
         let mut metadata = self.extract_entities(&content, &ext);
         
-        // --- Store EML Metadata Permanently ---
         if ext == "eml" {
             for line in content.lines().take(50) {
                 let lower = line.to_lowercase();
@@ -292,36 +342,48 @@ impl IngestionPipeline {
                 }
             }
         }
-        // --------------------------------------
 
         metadata.insert("created_at".to_string(), modified_at.to_string());
         metadata.insert("indexed_at".to_string(), now.to_string());
         metadata.insert("shallow_index".to_string(), is_shallow.to_string());
 
-        let vector_option = if is_shallow {
-            Some(vec![0.0; 384])
-        } else {
-            let safe_content = content.chars().take(8000).collect::<String>();
-            let mut model = self.ai_model.lock().unwrap();
-            match model.embed(vec![safe_content], None) {
-                Ok(mut embeddings) => embeddings.pop(),
-                Err(_) => None,
-            }
-        };
+        Some((path_str, content, is_shallow, modified_at, metadata))
+    }
 
-        if let Some(vector) = vector_option {
-            self.store.insert_document(
-                path_str,
-                content, 
-                vector,
-                modified_at,
-                metadata
-            );
-
-            if is_shallow {
-                println!("[Indexer] Shallow Tracked: {:?}", path.file_name().unwrap_or_default());
+    pub fn index_file(&self, path: &Path) {
+        if let Some((path_str, content, is_shallow, modified_at, metadata)) = self.prepare_document(path) {
+            let vector_option = if is_shallow {
+                Some(vec![0.0; 384])
             } else {
-                println!("[Indexer] Deep Processed: {:?}", path.file_name().unwrap_or_default());
+                let safe_content = content.chars().take(8000).collect::<String>();
+                let mut model = match self.ai_model.lock() {
+                    Ok(m) => m,
+                    Err(p) => p.into_inner(),
+                };
+                match model.embed(vec![safe_content], None) {
+                    Ok(mut embeddings) => embeddings.pop(),
+                    Err(_) => None,
+                }
+            };
+
+            if let Some(vector) = vector_option {
+                self.store.insert_document(
+                    path_str,
+                    content, 
+                    vector,
+                    modified_at,
+                    metadata
+                );
+
+                let filename = path.file_name().unwrap_or_default();
+                if is_shallow {
+                    self.progress.shallow_processed.fetch_add(1, Ordering::Relaxed);
+                    println!("[Indexer] Shallow Tracked: {:?}", filename);
+                } else {
+                    self.progress.deep_processed.fetch_add(1, Ordering::Relaxed);
+                    println!("[Indexer] Deep Processed: {:?}", filename);
+                }
+                self.progress.write_flush();
             }
         }
     }
@@ -331,11 +393,25 @@ impl IngestionPipeline {
     }
 
     pub fn run_indexer(&self, target_dirs: Vec<String>, max_depth: usize) {
+        self.progress.is_running.store(true, Ordering::Relaxed);
+        self.progress.deep_processed.store(0, Ordering::Relaxed);
+        self.progress.shallow_processed.store(0, Ordering::Relaxed);
+        self.progress.total_files.store(0, Ordering::Relaxed);
+        
         println!("[Indexer] Fetching existing index state for reconciliation...");
         let db_state = self.store.get_all_document_timestamps();
         let mut missing_or_modified = Vec::new();
 
         for target_dir in target_dirs {
+            {
+                let mut tgt = match self.progress.current_target.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                *tgt = target_dir.clone();
+            }
+            self.progress.write_flush();
+            
             println!("Scanning for missing or modified files in: {} (Max Depth: {})", target_dir, max_depth);
             
             for entry in WalkDir::new(&target_dir)
@@ -350,7 +426,6 @@ impl IngestionPipeline {
                 match entry {
                     Ok(e) => {
                         if e.file_type().is_file() || e.file_type().is_dir() {
-                            // SECURE: Force canonicalization during sweep to match DB and INotify precisely
                             let canonical_path = e.path().canonicalize().unwrap_or_else(|_| e.path().to_path_buf());
                             let path_str = canonical_path.to_string_lossy().to_string();
                             
@@ -372,8 +447,11 @@ impl IngestionPipeline {
                         }
                     },
                     Err(err) => {
-                        let is_permission_denied = err.io_error().map_or(false, |io| io.kind() == std::io::ErrorKind::PermissionDenied);
-                        if !is_permission_denied {
+                        let io_kind = err.io_error().map(|io| io.kind());
+                        let is_permission_denied = io_kind == Some(std::io::ErrorKind::PermissionDenied);
+                        let is_not_found = io_kind == Some(std::io::ErrorKind::NotFound);
+                        
+                        if !is_permission_denied && !is_not_found {
                             eprintln!("[Indexer] Directory traversal error in {}: {}", target_dir, err);
                         }
                     }
@@ -384,11 +462,112 @@ impl IngestionPipeline {
         if missing_or_modified.is_empty() {
             println!("[Indexer] Reconciliation complete. No missing files found from offline period.");
         } else {
-            println!("[Indexer] Reconciliation found {} missing or modified files. Indexing now...", missing_or_modified.len());
-            missing_or_modified.par_iter().for_each(|entry| {
-                self.index_file(entry.path());
-            });
+            println!("[Indexer] Reconciliation found {} missing or modified files. Indexing now in sequential batches...", missing_or_modified.len());
+            
+            self.progress.total_files.store(missing_or_modified.len(), Ordering::Relaxed);
+            self.progress.write_flush();
+            
+            // Reduced to 12 from 64 to entirely prevent parallelized Vision OCR deadlocks
+            // and keep system resources fluid during background execution.
+            let batch_size = 12; 
+            let total_batches = (missing_or_modified.len() as f64 / batch_size as f64).ceil() as usize;
+
+            for (batch_idx, chunk) in missing_or_modified.chunks(batch_size).enumerate() {
+                if !self.progress.is_running.load(Ordering::Relaxed) {
+                    println!("[Indexer] Sweep aborted by system.");
+                    break;
+                }
+
+                println!("[Indexer] Processing batch {}/{} ({} files)...", batch_idx + 1, total_batches, chunk.len());
+
+                let prepared_docs: Vec<_> = chunk.par_iter().filter_map(|entry| {
+                    let filename = entry.path().file_name().unwrap_or_default().to_string_lossy().to_string();
+                    
+                    let doc_opt = self.prepare_document(entry.path());
+                    
+                    if let Some(ref doc) = doc_opt {
+                        if doc.2 {
+                            self.progress.shallow_processed.fetch_add(1, Ordering::Relaxed);
+                            println!("[Indexer] Tracked (Shallow): {}", filename);
+                        } else {
+                            println!("[Indexer] Extracted (Deep/AI Queued): {}", filename);
+                        }
+                    } else {
+                        // The file was unmodified or already tracked in this edge case iteration
+                        self.progress.shallow_processed.fetch_add(1, Ordering::Relaxed);
+                        println!("[Indexer] Skipped (Unmodified/Already Indexed): {}", filename);
+                    }
+                    
+                    doc_opt.map(|d| (d, filename))
+                }).collect();
+
+                // By writing the flush here immediately after the file extraction phase, 
+                // the UI progress bar advances perfectly without waiting for the slow AI embeddings block.
+                self.progress.write_flush();
+
+                if prepared_docs.is_empty() { 
+                    continue; 
+                }
+
+                let mut texts_to_embed = Vec::new();
+                for (doc, _) in &prepared_docs {
+                    if !doc.2 {
+                        texts_to_embed.push(doc.1.chars().take(8000).collect::<String>());
+                    }
+                }
+
+                let mut embeddings_result = Vec::new();
+                if !texts_to_embed.is_empty() {
+                    println!("[Indexer] Generating AI embeddings for {} documents...", texts_to_embed.len());
+                    let mut model = match self.ai_model.lock() {
+                        Ok(m) => m,
+                        Err(p) => p.into_inner(),
+                    };
+                    if let Ok(embs) = model.embed(texts_to_embed, None) {
+                        embeddings_result = embs;
+                    } else {
+                        println!("[Indexer Warning] AI Embedding failed for batch, falling back to zero-vectors.");
+                    }
+                }
+
+                let mut final_docs = Vec::new();
+                let mut embed_idx = 0;
+
+                for (doc, filename) in prepared_docs {
+                    let vector = if doc.2 {
+                        vec![0.0; 384]
+                    } else {
+                        if embed_idx < embeddings_result.len() {
+                            let v = embeddings_result[embed_idx].clone();
+                            embed_idx += 1;
+                            self.progress.deep_processed.fetch_add(1, Ordering::Relaxed);
+                            println!("[Indexer] Embedded (Deep): {}", filename);
+                            v
+                        } else {
+                            // Fallback state keeps the progress totals perfectly matched to total_files
+                            self.progress.deep_processed.fetch_add(1, Ordering::Relaxed);
+                            println!("[Indexer] Processed (Deep/Fallback): {}", filename);
+                            vec![0.0; 384]
+                        }
+                    };
+
+                    final_docs.push((doc.0, doc.1, vector, doc.3, doc.4));
+                }
+
+                self.store.insert_documents(final_docs);
+                self.progress.write_flush();
+            }
         }
+        
+        self.progress.is_running.store(false, Ordering::Relaxed);
+        {
+            let mut tgt = match self.progress.current_target.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *tgt = String::new();
+        }
+        self.progress.write_flush();
         
         println!("Full Ingestion sweep complete.");
     }

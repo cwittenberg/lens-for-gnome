@@ -52,6 +52,28 @@ where
         return true;
     }
 
+    // ACTION: Return Ingestor Process Status Tracking
+    if json["action"].as_str() == Some("get_indexer_status") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let state_file = std::path::Path::new(&home).join(".config/gnome-lens/indexer_state.json");
+        
+        if let Ok(state_data) = std::fs::read_to_string(&state_file) {
+            if let Ok(state_json) = serde_json::from_str::<serde_json::Value>(&state_data) {
+                send_chunk(serde_json::json!({
+                    "status": "indexer_status",
+                    "data": state_json
+                }).to_string());
+                return true;
+            }
+        }
+        
+        send_chunk(serde_json::json!({
+            "status": "indexer_status",
+            "data": { "is_running": false, "deep_processed": 0, "shallow_processed": 0, "total_files": 0 }
+        }).to_string());
+        return true;
+    }
+
     // ACTION: Return Mail Sync Status
     if json["action"].as_str() == Some("get_mail_status") {
         let home = std::env::var("HOME").unwrap_or_default();
@@ -277,7 +299,6 @@ where
         if let Some(path) = json["path"].as_str() {
             println!("[IPC Chain] Stage 1: Backend attempting to open file natively (gio/xdg-open): {}", path);
             
-            // Use .status() to block and get the exit code, rather than detaching with .spawn()
             let status_res = std::process::Command::new("gio")
                 .arg("open")
                 .arg(path)
