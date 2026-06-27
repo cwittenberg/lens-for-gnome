@@ -13,7 +13,8 @@ export default class GnomeLensPreferences extends ExtensionPreferences {
         const settings = this.getSettings('org.gnome.shell.extensions.gnome-lens');
         
         window.add(buildGeneralPage(settings, window));
-        window.add(buildLookAndFeelPage(settings, window));
+        // Pass the ExtensionPreferences context 'this' down to look & feel to get the path
+        window.add(buildLookAndFeelPage(settings, window, this));
         window.add(buildAIPage(settings, window));
         window.add(buildIndexPage(settings, window));
         window.add(buildMailPage(settings, window));

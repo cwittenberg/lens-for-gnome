@@ -1,0 +1,114 @@
+/* gnome-extension/themes/gnome-light.css */
+/* ========================================================================
+ * GNOME LENS THEME: GNOME LIGHT (ADWAITA)
+ * ========================================================================
+ * Clean, bright, and perfectly integrated with GNOME's native light mode.
+ * Features frosted white backgrounds, sharp dark grey text, and blue accents.
+ * ======================================================================== 
+ */
+
+.lens-backdrop { background-color: rgba(0, 0, 0, 0.2) !important; }
+
+.lens-dialog {
+    background-color: #fafafa !important;
+    border: 1px solid #dcdcde !important;
+    border-radius: 16px !important;
+    box-shadow: 0px 10px 40px rgba(0, 0, 0, 0.15) !important;
+}
+
+.lens-search-icon { color: #5e5c64 !important; }
+
+.lens-entry {
+    color: #242424 !important;
+    selection-background-color: rgba(53, 132, 228, 0.3) !important;
+}
+
+.lens-clear-button, .lens-filter-button, .lens-close-button { 
+    color: #77767b !important; 
+}
+
+.lens-clear-button:hover, .lens-filter-button:hover, .lens-filter-button.active, .lens-close-button:hover {
+    background-color: #e6e5e3 !important;
+    color: #242424 !important;
+}
+
+.lens-advanced-filters-box, .lens-filters-box { border-bottom: 1px solid #e6e5e3 !important; }
+
+.lens-filter-input-box { 
+    background-color: #f6f5f4 !important; 
+    border: 1px solid #dcdcde !important; 
+    border-radius: 8px !important; 
+}
+
+.lens-filter-icon { color: #77767b !important; }
+.lens-filter-entry { color: #242424 !important; }
+.lens-filter-date-label { color: #5e5c64 !important; }
+
+.lens-date-pill, .lens-filter-pill {
+    background-color: #f6f5f4 !important;
+    color: #5e5c64 !important;
+    border-radius: 16px !important;
+    border: 1px solid #dcdcde !important;
+}
+
+.lens-date-pill:hover, .lens-date-pill:focus, .lens-filter-pill:hover, .lens-filter-pill:focus {
+    background-color: #deddda !important;
+    color: #242424 !important;
+}
+
+.lens-date-pill.active, .lens-filter-pill.active {
+    background-color: #3584e4 !important;
+    color: #ffffff !important;
+    border-color: #3584e4 !important;
+}
+
+.lens-filter-reset-btn {
+    background-color: rgba(224, 27, 36, 0.1) !important;
+    color: #e01b24 !important;
+    border-radius: 16px !important;
+    border: 1px solid transparent !important;
+}
+
+.lens-filter-reset-btn:hover, .lens-filter-reset-btn:focus {
+    background-color: rgba(224, 27, 36, 0.2) !important;
+    color: #a51d2d !important;
+}
+
+.lens-result-group-header { color: #5e5c64 !important; }
+
+.lens-result-item { border-radius: 10px !important; }
+
+.lens-result-item:hover { background-color: #f6f5f4 !important; }
+
+.lens-result-item.selected { background-color: rgba(53, 132, 228, 0.15) !important; }
+
+.lens-result-title, .lens-synthesis-answer { color: #242424 !important; font-weight: bold !important; }
+.lens-result-path, .lens-result-path-inline, .lens-result-snippet, .lens-count-label, .lens-synthesis-reasoning { color: #5e5c64 !important; }
+
+.lens-result-folder-pill { 
+    background-color: #f6f5f4 !important; 
+    border: 1px solid #dcdcde !important; 
+    border-radius: 8px !important; 
+}
+
+.lens-result-folder-pill-text { color: #3d3846 !important; }
+
+.lens-result-ai-reasoning, .lens-status-label { color: #26a269 !important; }
+.lens-result-item.irrelevant .lens-result-ai-reasoning { color: #e01b24 !important; }
+
+.lens-result-action-btn { color: #77767b !important; }
+.lens-result-action-btn:hover { background-color: #e6e5e3 !important; color: #242424 !important; }
+
+.lens-status-container, .lens-synthesis-reasoning { border-top: 1px solid #e6e5e3 !important; }
+
+.lens-synthesis-container {
+    background-color: #ffffff !important;
+    border: 1px solid #dcdcde !important;
+    border-radius: 12px !important;
+}
+
+.lens-synthesis-badge {
+    background-color: rgba(53, 132, 228, 0.15) !important;
+    color: #1c71d8 !important;
+    border-radius: 8px !important;
+}

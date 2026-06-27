@@ -1,0 +1,117 @@
+/* gnome-extension/themes/dracula.css */
+/* ========================================================================
+ * GNOME LENS THEME: DRACULA
+ * ========================================================================
+ * Based on the famous Dracula color palette.
+ * Background: #282a36, Current Line: #44475a, Foreground: #f8f8f2
+ * Comment: #6272a4, Cyan: #8be9fd, Green: #50fa7b, Orange: #ffb86c
+ * Pink: #ff79c6, Purple: #bd93f9, Red: #ff5555, Yellow: #f1fa8c
+ * ======================================================================== 
+ */
+
+.lens-backdrop { background-color: rgba(40, 42, 54, 0.6) !important; }
+
+.lens-dialog {
+    background-color: #282a36 !important;
+    border: 1px solid #44475a !important;
+    border-radius: 12px !important;
+    box-shadow: 0px 12px 35px rgba(0, 0, 0, 0.6) !important;
+}
+
+.lens-search-icon { color: #bd93f9 !important; }
+
+.lens-entry {
+    color: #f8f8f2 !important;
+    selection-background-color: rgba(189, 147, 249, 0.4) !important;
+}
+
+.lens-clear-button, .lens-filter-button, .lens-close-button {
+    color: #6272a4 !important;
+}
+
+.lens-clear-button:hover, .lens-filter-button:hover, .lens-filter-button.active, .lens-close-button:hover {
+    background-color: #44475a !important;
+    color: #ff79c6 !important;
+}
+
+.lens-advanced-filters-box, .lens-filters-box { border-bottom: 1px solid #44475a !important; }
+
+.lens-filter-input-box { 
+    background-color: #44475a !important; 
+    border-radius: 6px !important; 
+}
+
+.lens-filter-icon { color: #8be9fd !important; }
+.lens-filter-entry { color: #f8f8f2 !important; }
+.lens-filter-date-label { color: #ff79c6 !important; }
+
+.lens-date-pill, .lens-filter-pill {
+    background-color: #282a36 !important;
+    color: #f8f8f2 !important;
+    border-radius: 16px !important;
+    border: 1px solid #6272a4 !important;
+}
+
+.lens-date-pill:hover, .lens-date-pill:focus, .lens-filter-pill:hover, .lens-filter-pill:focus {
+    background-color: #44475a !important;
+    color: #8be9fd !important;
+    border-color: #8be9fd !important;
+}
+
+.lens-date-pill.active, .lens-filter-pill.active {
+    background-color: #bd93f9 !important;
+    color: #282a36 !important;
+    border: 1px solid #bd93f9 !important;
+}
+
+.lens-filter-reset-btn {
+    background-color: rgba(255, 85, 85, 0.1) !important;
+    color: #ff5555 !important;
+    border-radius: 16px !important;
+    border: 1px solid rgba(255, 85, 85, 0.3) !important;
+}
+
+.lens-filter-reset-btn:hover, .lens-filter-reset-btn:focus {
+    background-color: #ff5555 !important;
+    color: #282a36 !important;
+}
+
+.lens-result-group-header { color: #ffb86c !important; }
+
+.lens-result-item { border-radius: 8px !important; }
+
+.lens-result-item:hover { background-color: #44475a !important; }
+
+.lens-result-item.selected { 
+    background-color: rgba(139, 233, 253, 0.15) !important; 
+}
+
+.lens-result-title, .lens-synthesis-answer { color: #f8f8f2 !important; font-weight: bold !important; }
+.lens-result-path, .lens-result-path-inline, .lens-result-snippet, .lens-count-label, .lens-synthesis-reasoning { color: #6272a4 !important; }
+
+.lens-result-folder-pill {
+    background-color: #44475a !important;
+    border-radius: 8px !important;
+}
+
+.lens-result-folder-pill-text { color: #ff79c6 !important; }
+
+.lens-result-ai-reasoning, .lens-status-label { color: #50fa7b !important; }
+.lens-result-item.irrelevant .lens-result-ai-reasoning { color: #ff5555 !important; }
+
+.lens-result-action-btn { color: #6272a4 !important; }
+.lens-result-action-btn:hover { background-color: #44475a !important; color: #8be9fd !important; }
+
+.lens-status-container, .lens-synthesis-reasoning { border-top: 1px solid #44475a !important; }
+
+.lens-synthesis-container {
+    background-color: #282a36 !important;
+    border: 1px solid #6272a4 !important;
+    border-radius: 12px !important;
+}
+
+.lens-synthesis-badge {
+    background-color: rgba(80, 250, 123, 0.2) !important;
+    color: #50fa7b !important;
+    border-radius: 8px !important;
+}

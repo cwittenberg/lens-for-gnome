@@ -1,0 +1,121 @@
+/* gnome-extension/themes/matrix.css */
+/* ========================================================================
+ * GNOME LENS THEME: THE MATRIX
+ * ========================================================================
+ * "Wake up, Neo..."
+ * Features: Pure black backgrounds, neon green text, sharp corners, 
+ * monospace fonts, and glowing selection states.
+ * ======================================================================== 
+ */
+
+.lens-backdrop { background-color: rgba(0, 0, 0, 0.8) !important; }
+
+.lens-dialog {
+    background-color: #000000 !important;
+    border: 1px solid #00FF41 !important;
+    border-radius: 0px !important;
+    box-shadow: 0px 0px 25px rgba(0, 255, 65, 0.25) !important;
+    font-family: monospace !important;
+}
+
+.lens-search-icon { color: #00FF41 !important; }
+
+.lens-entry {
+    color: #00FF41 !important;
+    font-weight: bold !important;
+    selection-background-color: rgba(0, 255, 65, 0.4) !important;
+    font-family: monospace !important;
+}
+
+.lens-clear-button, .lens-filter-button, .lens-close-button {
+    border-radius: 0px !important;
+    color: #008F11 !important;
+}
+
+.lens-clear-button:hover, .lens-filter-button:hover, .lens-filter-button.active, .lens-close-button:hover {
+    background-color: rgba(0, 255, 65, 0.2) !important;
+    color: #00FF41 !important;
+}
+
+.lens-advanced-filters-box, .lens-filters-box { border-bottom: 1px dashed #008F11 !important; }
+
+.lens-filter-input-box {
+    background-color: rgba(0, 255, 65, 0.05) !important;
+    border: 1px solid #008F11 !important;
+    border-radius: 0px !important;
+}
+
+.lens-filter-icon, .lens-filter-entry { color: #00FF41 !important; font-family: monospace !important; }
+
+.lens-filter-date-label { color: #008F11 !important; font-family: monospace !important; }
+
+.lens-date-pill, .lens-filter-reset-btn, .lens-filter-pill {
+    border-radius: 0px !important;
+    border: 1px solid #008F11 !important;
+    background-color: #000000 !important;
+    color: #008F11 !important;
+    font-family: monospace !important;
+}
+
+.lens-date-pill:hover, .lens-date-pill:focus, .lens-filter-reset-btn:hover, .lens-filter-reset-btn:focus, .lens-filter-pill:hover, .lens-filter-pill:focus {
+    background-color: rgba(0, 255, 65, 0.2) !important;
+    color: #00FF41 !important;
+    border-color: #00FF41 !important;
+}
+
+.lens-date-pill.active, .lens-filter-pill.active {
+    background-color: #00FF41 !important;
+    color: #000000 !important;
+}
+
+.lens-result-group-header { color: #008F11 !important; font-family: monospace !important; }
+
+.lens-result-item {
+    border-radius: 0px !important;
+    border-left: 2px solid transparent !important; 
+}
+
+.lens-result-item:hover { background-color: rgba(0, 255, 65, 0.05) !important; }
+
+.lens-result-item.selected {
+    background-color: rgba(0, 255, 65, 0.15) !important;
+    border-left: 2px solid #00FF41 !important;
+}
+
+.lens-result-item.irrelevant { opacity: 0.3 !important; }
+
+.lens-result-title, .lens-result-folder-pill-text, .lens-result-ai-reasoning, .lens-status-label, .lens-synthesis-answer {
+    color: #00FF41 !important;
+    font-family: monospace !important;
+}
+
+.lens-result-path, .lens-result-path-inline, .lens-result-snippet, .lens-result-item.irrelevant .lens-result-ai-reasoning, .lens-result-action-btn, .lens-count-label, .lens-synthesis-reasoning {
+    color: #008F11 !important;
+    font-family: monospace !important;
+}
+
+.lens-result-folder-pill {
+    background-color: #000000 !important;
+    border: 1px solid #008F11 !important;
+    border-radius: 0px !important;
+}
+
+.lens-result-action-btn:hover {
+    background-color: #00FF41 !important;
+    color: #000000 !important;
+}
+
+.lens-status-container, .lens-synthesis-reasoning { border-top: 1px dashed #008F11 !important; }
+
+.lens-synthesis-container {
+    background-color: #000000 !important;
+    border: 1px solid #00FF41 !important;
+    border-radius: 0px !important;
+}
+
+.lens-synthesis-badge {
+    background-color: #00FF41 !important;
+    color: #000000 !important;
+    border-radius: 0px !important;
+    font-family: monospace !important;
+}

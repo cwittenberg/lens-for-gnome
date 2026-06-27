@@ -1,0 +1,106 @@
+/* gnome-extension/themes/nord.css */
+/* ========================================================================
+ * GNOME LENS THEME: NORD
+ * ========================================================================
+ * An arctic, north-bluish clean and elegant theme.
+ * Focuses on smooth greys, frosty blues, and soft transitions.
+ * ======================================================================== 
+ */
+
+.lens-backdrop { background-color: rgba(46, 52, 64, 0.6) !important; }
+
+.lens-dialog {
+    background-color: #2E3440 !important;
+    border: 1px solid #434C5E !important;
+    border-radius: 12px !important;
+    box-shadow: 0px 10px 40px rgba(0, 0, 0, 0.4) !important;
+}
+
+.lens-search-icon { color: #88C0D0 !important; }
+
+.lens-entry {
+    color: #ECEFF4 !important;
+    selection-background-color: rgba(136, 192, 208, 0.4) !important;
+}
+
+.lens-clear-button, .lens-filter-button, .lens-close-button {
+    color: #4C566A !important;
+}
+
+.lens-clear-button:hover, .lens-filter-button:hover, .lens-filter-button.active, .lens-close-button:hover {
+    background-color: #3B4252 !important;
+    color: #88C0D0 !important;
+}
+
+.lens-advanced-filters-box, .lens-filters-box { border-bottom: 1px solid #3B4252 !important; }
+
+.lens-filter-input-box { background-color: #3B4252 !important; border-radius: 8px !important; }
+
+.lens-filter-icon { color: #4C566A !important; }
+.lens-filter-entry { color: #D8DEE9 !important; }
+.lens-filter-date-label { color: #D8DEE9 !important; }
+
+.lens-date-pill, .lens-filter-pill {
+    background-color: #3B4252 !important;
+    color: #D8DEE9 !important;
+    border-radius: 12px !important;
+}
+
+.lens-date-pill:hover, .lens-date-pill:focus, .lens-filter-pill:hover, .lens-filter-pill:focus {
+    background-color: #434C5E !important;
+    color: #ECEFF4 !important;
+}
+
+.lens-date-pill.active, .lens-filter-pill.active {
+    background-color: #88C0D0 !important;
+    color: #2E3440 !important;
+}
+
+.lens-filter-reset-btn {
+    background-color: rgba(191, 97, 106, 0.15) !important;
+    color: #BF616A !important;
+    border-radius: 12px !important;
+}
+
+.lens-filter-reset-btn:hover, .lens-filter-reset-btn:focus {
+    background-color: rgba(191, 97, 106, 0.3) !important;
+    color: #ECEFF4 !important;
+}
+
+.lens-result-group-header { color: #8FBCBB !important; }
+
+.lens-result-item { border-radius: 8px !important; }
+
+.lens-result-item:hover { background-color: #3B4252 !important; }
+
+.lens-result-item.selected { background-color: #434C5E !important; }
+
+.lens-result-title, .lens-synthesis-answer { color: #ECEFF4 !important; }
+.lens-result-path, .lens-result-path-inline, .lens-result-snippet, .lens-count-label, .lens-synthesis-reasoning { color: #D8DEE9 !important; }
+
+.lens-result-folder-pill {
+    background-color: #3B4252 !important;
+    border-radius: 8px !important;
+}
+
+.lens-result-folder-pill-text { color: #88C0D0 !important; }
+
+.lens-result-ai-reasoning, .lens-status-label { color: #A3BE8C !important; }
+.lens-result-item.irrelevant .lens-result-ai-reasoning { color: #BF616A !important; }
+
+.lens-result-action-btn { color: #4C566A !important; }
+.lens-result-action-btn:hover { background-color: #434C5E !important; color: #88C0D0 !important; }
+
+.lens-status-container, .lens-synthesis-reasoning { border-top: 1px solid #3B4252 !important; }
+
+.lens-synthesis-container {
+    background-color: #3B4252 !important;
+    border: 1px solid #4C566A !important;
+    border-radius: 12px !important;
+}
+
+.lens-synthesis-badge {
+    background-color: rgba(136, 192, 208, 0.2) !important;
+    color: #88C0D0 !important;
+    border-radius: 8px !important;
+}

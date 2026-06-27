@@ -1,0 +1,154 @@
+/* gnome-extension/themes/synthwave.css */
+/* ========================================================================
+ * GNOME LENS THEME: SYNTHWAVE
+ * ========================================================================
+ * A retro-futuristic, Outrun-inspired aesthetic.
+ * Uses deep purple/magenta linear gradients, glowing cyan text, 
+ * and hot pink accents.
+ * ======================================================================== 
+ */
+
+.lens-backdrop { 
+    background-color: rgba(26, 11, 46, 0.7) !important; 
+}
+
+.lens-dialog {
+    background-image: linear-gradient(to bottom right, #240b36, #140424) !important;
+    background-color: transparent !important;
+    border: 1px solid #ff007f !important;
+    border-radius: 12px !important;
+    box-shadow: 0px 10px 40px rgba(255, 0, 127, 0.3), inset 0px 0px 15px rgba(0, 243, 255, 0.1) !important;
+}
+
+.lens-search-icon { 
+    color: #ff007f !important; 
+}
+
+.lens-entry {
+    color: #00f3ff !important;
+    font-weight: 600 !important;
+    selection-background-color: rgba(255, 0, 127, 0.5) !important;
+}
+
+.lens-clear-button, .lens-filter-button, .lens-close-button {
+    color: rgba(0, 243, 255, 0.6) !important;
+}
+
+.lens-clear-button:hover, .lens-filter-button:hover, .lens-filter-button.active, .lens-close-button:hover {
+    background-color: rgba(255, 0, 127, 0.2) !important;
+    color: #00f3ff !important;
+}
+
+.lens-advanced-filters-box, .lens-filters-box { 
+    border-bottom: 1px solid rgba(255, 0, 127, 0.4) !important; 
+}
+
+.lens-filter-input-box { 
+    background-color: rgba(0, 0, 0, 0.3) !important; 
+    border: 1px solid rgba(0, 243, 255, 0.3) !important;
+    border-radius: 8px !important; 
+}
+
+.lens-filter-icon { color: #ff007f !important; }
+.lens-filter-entry { color: #00f3ff !important; }
+.lens-filter-date-label { color: #ff007f !important; font-weight: bold !important; }
+
+.lens-date-pill, .lens-filter-pill {
+    background-color: rgba(0, 0, 0, 0.4) !important;
+    color: #00f3ff !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(0, 243, 255, 0.3) !important;
+}
+
+.lens-date-pill:hover, .lens-date-pill:focus, .lens-filter-pill:hover, .lens-filter-pill:focus {
+    background-color: rgba(0, 243, 255, 0.2) !important;
+    color: #ffffff !important;
+    border-color: #00f3ff !important;
+    box-shadow: 0px 0px 8px rgba(0, 243, 255, 0.4) !important;
+}
+
+.lens-date-pill.active, .lens-filter-pill.active {
+    background-image: linear-gradient(to right, #ff007f, #b92b27) !important;
+    background-color: transparent !important;
+    color: #ffffff !important;
+    border: 1px solid #ff007f !important;
+    box-shadow: 0px 0px 10px rgba(255, 0, 127, 0.5) !important;
+}
+
+.lens-filter-reset-btn {
+    background-color: rgba(255, 0, 0, 0.1) !important;
+    color: #ff3366 !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(255, 51, 102, 0.4) !important;
+}
+
+.lens-filter-reset-btn:hover, .lens-filter-reset-btn:focus {
+    background-color: rgba(255, 51, 102, 0.3) !important;
+    color: #ffffff !important;
+}
+
+.lens-result-group-header { 
+    color: #ff007f !important; 
+    font-weight: 800 !important;
+    letter-spacing: 1px !important;
+}
+
+.lens-result-item { 
+    border-radius: 8px !important; 
+    border-left: 3px solid transparent !important;
+}
+
+.lens-result-item:hover { 
+    background-color: rgba(0, 243, 255, 0.08) !important; 
+}
+
+.lens-result-item.selected { 
+    background-color: rgba(255, 0, 127, 0.15) !important; 
+    border-left: 3px solid #ff007f !important;
+}
+
+.lens-result-title, .lens-synthesis-answer { 
+    color: #ffffff !important; 
+    text-shadow: 0px 0px 4px rgba(255, 255, 255, 0.3) !important;
+}
+
+.lens-result-path, .lens-result-path-inline, .lens-result-snippet, .lens-count-label, .lens-synthesis-reasoning { 
+    color: #b388eb !important; 
+}
+
+.lens-result-folder-pill {
+    background-image: linear-gradient(to right, #4a00e0, #8e2de2) !important;
+    background-color: transparent !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.lens-result-folder-pill-text { color: #ffffff !important; font-weight: bold !important; }
+
+.lens-result-ai-reasoning, .lens-status-label { color: #00f3ff !important; }
+.lens-result-item.irrelevant .lens-result-ai-reasoning { color: #ff007f !important; }
+
+.lens-result-action-btn { color: #b388eb !important; }
+.lens-result-action-btn:hover { 
+    background-color: rgba(0, 243, 255, 0.2) !important; 
+    color: #00f3ff !important; 
+}
+
+.lens-status-container, .lens-synthesis-reasoning { 
+    border-top: 1px solid rgba(255, 0, 127, 0.4) !important; 
+}
+
+.lens-synthesis-container {
+    background-color: rgba(0, 0, 0, 0.4) !important;
+    border: 1px solid #00f3ff !important;
+    border-radius: 12px !important;
+    box-shadow: inset 0px 0px 20px rgba(0, 243, 255, 0.1) !important;
+}
+
+.lens-synthesis-badge {
+    background-image: linear-gradient(to right, #00f3ff, #0072ff) !important;
+    background-color: transparent !important;
+    color: #ffffff !important;
+    border-radius: 8px !important;
+    font-weight: 800 !important;
+}

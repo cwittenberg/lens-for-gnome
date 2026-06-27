@@ -21,7 +21,7 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         let row1 = new St.BoxLayout({ 
             vertical: false,
             x_expand: true,
-            style: 'spacing: 12px;'
+            style_class: 'lens-advanced-filters-row'
         });
         
         this._dirEntry = this._createInput('folder-symbolic', 'Directory (e.g. ~/Docs)');
@@ -46,11 +46,11 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         let dateLabel = new St.Label({
             text: 'Modified:',
             y_align: Clutter.ActorAlign.CENTER,
-            style: 'color: rgba(255,255,255,0.5); font-size: 10pt; margin-right: 12px;'
+            style_class: 'lens-filter-date-label'
         });
         row2.add_child(dateLabel);
 
-        this._datePillsBox = new St.BoxLayout({ vertical: false, style: 'spacing: 8px;' });
+        this._datePillsBox = new St.BoxLayout({ vertical: false, style_class: 'lens-date-pills-box' });
         this._dateOptions = [
             { label: 'Any time', days: null },
             { label: 'Today', days: 1 },
@@ -315,6 +315,11 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         this.visible = !this.visible;
         return this.visible;
     }
+
+    destroy() {
+        this.disconnectObject(this);
+        super.destroy();
+    }
 });
 
 export const GnomeLensSearchBar = GObject.registerClass(
@@ -338,7 +343,6 @@ class GnomeLensSearchBar extends St.BoxLayout {
             style_class: 'lens-search-icon',
             y_align: Clutter.ActorAlign.CENTER,
         });
-        this._searchIcon.set_style('margin-right: 12px; color: rgba(255, 255, 255, 0.5);');
         this.add_child(this._searchIcon);
 
         this._entry = new St.Entry({

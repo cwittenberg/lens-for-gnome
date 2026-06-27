@@ -16,6 +16,7 @@ rm -f "$UUID.shell-extension.zip"
 echo "Creating build directory structure..."
 mkdir -p "$BUILD_DIR/schemas"
 mkdir -p "$BUILD_DIR/locale"
+mkdir -p "$BUILD_DIR/themes"
 mkdir -p "po"
 
 echo "Validating extension files..."
@@ -66,6 +67,13 @@ if [ -f stylesheet.css ]; then
     cp stylesheet.css "$BUILD_DIR/"
 fi
 
+# Explicitly discover and copy all custom themes (CSS only)
+if [ -d "themes" ]; then
+    echo "Discovered themes directory. Capturing custom themes:"
+    find themes -type f -name '*.css' -print
+    cp -a themes/. "$BUILD_DIR/themes/"
+fi
+
 if [ -f trayicon.svg ]; then
     cp trayicon.svg "$BUILD_DIR/"
 fi
@@ -108,6 +116,10 @@ if command -v gnome-extensions &> /dev/null; then
 
     if [ -f "$BUILD_DIR/stylesheet.css" ]; then
         PACK_ARGS+=("--extra-source=stylesheet.css")
+    fi
+
+    if [ -d "$BUILD_DIR/themes" ]; then
+        PACK_ARGS+=("--extra-source=themes")
     fi
 
     if [ -f "$BUILD_DIR/LICENSE" ]; then
@@ -183,6 +195,10 @@ cp -r "$BUILD_DIR/schemas" "$EXTENSION_DIR/"
 
 if [ -f "$BUILD_DIR/stylesheet.css" ]; then
     cp "$BUILD_DIR/stylesheet.css" "$EXTENSION_DIR/"
+fi
+
+if [ -d "$BUILD_DIR/themes" ]; then
+    cp -a "$BUILD_DIR/themes/." "$EXTENSION_DIR/themes/"
 fi
 
 if [ -f "$BUILD_DIR/trayicon.svg" ]; then

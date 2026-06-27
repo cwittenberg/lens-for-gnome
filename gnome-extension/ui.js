@@ -37,6 +37,7 @@ export const GnomeLensUI = GObject.registerClass({
         
         this.isOpen = false;
         this.isClosing = false;
+        this._currentThemeFile = null;
 
         this._buildUI();
         
@@ -51,6 +52,8 @@ export const GnomeLensUI = GObject.registerClass({
             'changed::ui-color', this._applyStyles.bind(this),
             'changed::ui-transparency', this._applyStyles.bind(this),
             'changed::ui-shadow', this._applyStyles.bind(this),
+            'changed::ui-theme-path', this._applyTheme.bind(this),
+            'changed::show-backdrop', this._applyBackdrop.bind(this),
             'changed::show-document-text', () => {
                 if (this._lastResults && this._lastResults.length > 0) {
                     this._resultsList.renderResults(this._lastResults, this._activeFilter);
@@ -60,6 +63,41 @@ export const GnomeLensUI = GObject.registerClass({
         );
 
         this._applyStyles();
+        this._applyTheme();
+        this._applyBackdrop();
+    }
+
+    _applyBackdrop() {
+        if (this._settings.get_boolean('show-backdrop')) {
+            this.add_style_class_name('lens-backdrop');
+        } else {
+            this.remove_style_class_name('lens-backdrop');
+        }
+    }
+
+    _applyTheme() {
+        let themePath = this._settings.get_string('ui-theme-path');
+        let themeContext = St.ThemeContext.get_for_stage(global.stage);
+        
+        if (!themeContext) return;
+        let theme = themeContext.get_theme();
+        if (!theme) return;
+
+        // Unload the old custom theme to prevent stacking and memory leaks
+        if (this._currentThemeFile) {
+            theme.unload_stylesheet(this._currentThemeFile);
+            this._currentThemeFile = null;
+        }
+
+        // If a path exists, load it. Otherwise, leaving it unloaded means the extension's
+        // root stylesheet.css naturally takes over.
+        if (themePath) {
+            let fileToLoad = Gio.File.new_for_path(themePath);
+            if (fileToLoad.query_exists(null)) {
+                theme.load_stylesheet(fileToLoad);
+                this._currentThemeFile = fileToLoad;
+            }
+        }
     }
 
     _applyStyles() {
@@ -67,15 +105,18 @@ export const GnomeLensUI = GObject.registerClass({
         let opacity = this._settings.get_int('ui-transparency') / 100.0;
         let shadow = this._settings.get_boolean('ui-shadow');
         
-        let r = 30, g = 30, b = 30;
-        if (/^#[0-9A-Fa-f]{6}$/.test(color)) {
-            r = parseInt(color.slice(1, 3), 16);
-            g = parseInt(color.slice(3, 5), 16);
-            b = parseInt(color.slice(5, 7), 16);
+        let bgCss = '';
+        
+        // If a theme overrides ui-color, it will reset it to empty. 
+        // We only apply the inline style if a valid hex is set.
+        if (color && /^#[0-9A-Fa-f]{6}$/.test(color)) {
+            let r = parseInt(color.slice(1, 3), 16);
+            let g = parseInt(color.slice(3, 5), 16);
+            let b = parseInt(color.slice(5, 7), 16);
+            bgCss = `background-color: rgba(${r}, ${g}, ${b}, ${opacity});`;
         }
 
         let shadowCss = shadow ? 'box-shadow: 0px 15px 50px rgba(0, 0, 0, 0.5);' : 'box-shadow: none;';
-        let bgCss = `background-color: rgba(${r}, ${g}, ${b}, ${opacity});`;
         
         this._dialog.set_style(`${bgCss} ${shadowCss}`);
     }
@@ -189,7 +230,6 @@ export const GnomeLensUI = GObject.registerClass({
             vertical: false,
             x_align: Clutter.ActorAlign.START,
             visible: false,
-            style: 'spacing: 10px;'
         });
         this._dialog.add_child(this._filtersBox);
 
@@ -317,12 +357,13 @@ export const GnomeLensUI = GObject.registerClass({
         let dialogWidth = Math.max(700, Math.min(1000, Math.floor(monitor.width * 0.5)));
         this._dialog.set_width(dialogWidth);
         
-        let maxScrollHeight = Math.max(400, Math.min(800, Math.floor(monitor.height * 0.6)));
-        this._resultsList.style = `max-height: ${maxScrollHeight}px;`;
+        // Reduced max height to ensure status bar stays visible on screen
+        let maxScrollHeight = Math.max(300, Math.min(600, Math.floor(monitor.height * 0.45)));
+        this._resultsList.set_style(`max-height: ${maxScrollHeight}px;`);
         
         let targetX = Math.floor((monitor.width - dialogWidth) / 2);
         let targetY = hasResults 
-            ? Math.floor(monitor.height * 0.20) 
+            ? Math.floor(monitor.height * 0.15) 
             : Math.floor(monitor.height * 0.35);
             
         this._dialog.remove_transition('x');
@@ -664,6 +705,17 @@ export const GnomeLensUI = GObject.registerClass({
                 launch.cancel();
             }
             this._activeLaunches = [];
+        }
+
+        if (this._currentThemeFile) {
+            let themeContext = St.ThemeContext.get_for_stage(global.stage);
+            if (themeContext) {
+                let theme = themeContext.get_theme();
+                if (theme) {
+                    theme.unload_stylesheet(this._currentThemeFile);
+                }
+            }
+            this._currentThemeFile = null;
         }
 
         this._service.cancel();

@@ -61,6 +61,11 @@
       <summary>UI Background Color</summary>
       <description>Hex color code for the search window background.</description>
     </key>
+    <key name="ui-theme-path" type="s">
+      <default>''</default>
+      <summary>UI Theme File</summary>
+      <description>Path to a .css file to customize the look and feel.</description>
+    </key>
     <key name="ui-transparency" type="i">
       <default>95</default>
       <summary>UI Transparency</summary>
@@ -70,6 +75,11 @@
       <default>true</default>
       <summary>UI Shadow</summary>
       <description>Toggle the drop shadow of the search window.</description>
+    </key>
+    <key name="show-backdrop" type="b">
+      <default>true</default>
+      <summary>Show Screen Backdrop Overlay</summary>
+      <description>Dims the screen behind the Gnome Lens search dialog.</description>
     </key>
     <key name="ui-animation" type="b">
       <default>true</default>

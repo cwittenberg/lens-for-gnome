@@ -4,7 +4,7 @@ import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
 import Gdk from 'gi://Gdk';
 
-export function buildLookAndFeelPage(settings, window) {
+export function buildLookAndFeelPage(settings, window, extensionPrefs) {
     const page = new Adw.PreferencesPage({
         title: 'Look & Feel',
         icon_name: 'preferences-desktop-appearance-symbolic'
@@ -56,6 +56,10 @@ export function buildLookAndFeelPage(settings, window) {
     });
 
     let initialHex = settings.get_string('ui-color');
+    if (!initialHex || initialHex.trim() === '') {
+        initialHex = '#1e1e1e';
+    }
+    
     let rgba = new Gdk.RGBA();
     rgba.parse(initialHex);
 
@@ -105,12 +109,94 @@ export function buildLookAndFeelPage(settings, window) {
     settings.bind('ui-transparency', transRow.adjustment, 'value', Gio.SettingsBindFlags.DEFAULT);
     uiGroup.add(transRow);
 
+    const themeRow = new Adw.ActionRow({
+        title: 'Custom Theme (.css)',
+        subtitle: settings.get_string('ui-theme-path') || 'Default internal theme',
+    });
+
+    const selectThemeBtn = new Gtk.Button({
+        label: 'Browse...',
+        valign: Gtk.Align.CENTER,
+    });
+
+    selectThemeBtn.connect('clicked', () => {
+        let dialog = new Gtk.FileDialog({ title: 'Select Theme File' });
+        
+        let filter = new Gtk.FileFilter();
+        filter.set_name("Theme Files (*.css)");
+        filter.add_pattern("*.css");
+        
+        let filters = Gio.ListStore.new(Gtk.FileFilter);
+        filters.append(filter);
+        dialog.set_filters(filters);
+
+        if (extensionPrefs && extensionPrefs.dir) {
+            let themesDir = extensionPrefs.dir.get_child('themes');
+            if (themesDir.query_exists(null)) {
+                dialog.set_initial_folder(themesDir);
+            }
+        }
+
+        dialog.open(window, null, (dlg, res) => {
+            try {
+                let file = dlg.open_finish(res);
+                if (file) {
+                    let path = file.get_path();
+                    settings.set_string('ui-theme-path', path);
+                    settings.set_string('ui-color', ''); 
+                    themeRow.set_subtitle(path);
+                }
+            } catch (e) {
+                // Ignore cancellation
+            }
+        });
+    });
+
+    const clearThemeBtn = new Gtk.Button({
+        icon_name: 'edit-clear-symbolic',
+        valign: Gtk.Align.CENTER,
+        margin_start: 8,
+        tooltip_text: 'Revert to default theme',
+    });
+    clearThemeBtn.add_css_class('destructive-action');
+    clearThemeBtn.connect('clicked', () => {
+        settings.set_string('ui-theme-path', '');
+        settings.set_string('ui-color', '#1e1e1e');
+        themeRow.set_subtitle('Default internal theme');
+    });
+
+    const themeBox = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
+    themeBox.append(selectThemeBtn);
+    themeBox.append(clearThemeBtn);
+    
+    themeRow.add_suffix(themeBox);
+    uiGroup.add(themeRow);
+
+    // Disable the color/transparency manual settings if a theme is applied
+    const updateThemeSensitivity = () => {
+        let activeTheme = settings.get_string('ui-theme-path');
+        let hasTheme = (activeTheme !== null && activeTheme.trim() !== '');
+        
+        colorRow.set_sensitive(!hasTheme);
+        transRow.set_sensitive(!hasTheme);
+    };
+
+    settings.connect('changed::ui-theme-path', updateThemeSensitivity);
+    updateThemeSensitivity();
+
     const shadowRow = new Adw.SwitchRow({
         title: 'Window Shadow',
         subtitle: 'Enable drop shadow behind the search window.',
     });
     settings.bind('ui-shadow', shadowRow, 'active', Gio.SettingsBindFlags.DEFAULT);
     uiGroup.add(shadowRow);
+
+    const backdropRow = new Adw.SwitchRow({
+        title: 'Show Screen Overlay',
+        subtitle: 'Dim the background screen behind the search window.',
+    });
+    settings.bind('show-backdrop', backdropRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+    uiGroup.add(backdropRow);
 
     page.add(uiGroup);
 
@@ -147,8 +233,6 @@ export function buildLookAndFeelPage(settings, window) {
     typeRow.set_sensitive(settings.get_boolean('ui-animation'));
     
     animGroup.add(typeRow);
-
-    page.add(animGroup);
 
     return page;
 }

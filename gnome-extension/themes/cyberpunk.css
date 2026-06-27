@@ -1,0 +1,124 @@
+/* gnome-extension/themes/cyberpunk.css */
+/* ========================================================================
+ * GNOME LENS THEME: CYBERPUNK 2077
+ * ========================================================================
+ * High contrast, aggressive neon colors, sharp edges.
+ * Uses a palette of Hot Pink, Cyan, and Neon Yellow over deep dark blue.
+ * ======================================================================== 
+ */
+
+.lens-backdrop { background-color: rgba(5, 5, 15, 0.7) !important; }
+
+.lens-dialog {
+    background-color: #0B0B1A !important;
+    border: 1px solid #00F0FF !important;
+    border-radius: 0px !important;
+    box-shadow: 8px 8px 0px rgba(255, 0, 60, 0.4) !important; /* Aggressive offset shadow */
+}
+
+.lens-search-icon { color: #FCE205 !important; }
+
+.lens-entry {
+    color: #FF003C !important;
+    font-weight: bold !important;
+    selection-background-color: rgba(0, 240, 255, 0.4) !important;
+}
+
+.lens-clear-button, .lens-filter-button, .lens-close-button {
+    border-radius: 0px !important;
+    color: #00F0FF !important;
+}
+
+.lens-clear-button:hover, .lens-filter-button:hover, .lens-filter-button.active, .lens-close-button:hover {
+    background-color: #FF003C !important;
+    color: #FFFFFF !important;
+}
+
+.lens-advanced-filters-box, .lens-filters-box { border-bottom: 2px solid #00F0FF !important; }
+
+.lens-filter-input-box {
+    background-color: rgba(0, 240, 255, 0.05) !important;
+    border: 1px solid #00F0FF !important;
+    border-radius: 0px !important;
+}
+
+.lens-filter-icon { color: #FF003C !important; }
+.lens-filter-entry { color: #FFFFFF !important; }
+.lens-filter-date-label { color: #00F0FF !important; text-transform: uppercase !important; }
+
+.lens-date-pill, .lens-filter-pill {
+    background-color: #0B0B1A !important;
+    color: #00F0FF !important;
+    border-radius: 0px !important;
+    border: 1px solid #00F0FF !important;
+    text-transform: uppercase !important;
+}
+
+.lens-date-pill:hover, .lens-date-pill:focus, .lens-filter-pill:hover, .lens-filter-pill:focus {
+    background-color: #00F0FF !important;
+    color: #0B0B1A !important;
+}
+
+.lens-date-pill.active, .lens-filter-pill.active {
+    background-color: #FCE205 !important;
+    color: #0B0B1A !important;
+    border-color: #FCE205 !important;
+}
+
+.lens-filter-reset-btn {
+    background-color: transparent !important;
+    color: #FF003C !important;
+    border-radius: 0px !important;
+    border: 1px solid #FF003C !important;
+    text-transform: uppercase !important;
+}
+
+.lens-filter-reset-btn:hover, .lens-filter-reset-btn:focus {
+    background-color: #FF003C !important;
+    color: #FFFFFF !important;
+}
+
+.lens-result-group-header { color: #FCE205 !important; text-transform: uppercase !important; }
+
+.lens-result-item {
+    border-radius: 0px !important;
+    border-left: 3px solid transparent !important; 
+}
+
+.lens-result-item:hover { background-color: rgba(255, 0, 60, 0.1) !important; }
+
+.lens-result-item.selected {
+    background-color: rgba(0, 240, 255, 0.15) !important;
+    border-left: 3px solid #00F0FF !important;
+}
+
+.lens-result-title, .lens-synthesis-answer { color: #FFFFFF !important; font-weight: bold !important; }
+.lens-result-path, .lens-result-path-inline, .lens-result-snippet, .lens-count-label, .lens-synthesis-reasoning { color: #A0A0B0 !important; }
+
+.lens-result-folder-pill {
+    background-color: #00F0FF !important;
+    border-radius: 0px !important;
+}
+
+.lens-result-folder-pill-text { color: #0B0B1A !important; font-weight: bold !important; }
+
+.lens-result-ai-reasoning, .lens-status-label { color: #FCE205 !important; }
+.lens-result-item.irrelevant .lens-result-ai-reasoning { color: #FF003C !important; }
+
+.lens-result-action-btn { border-radius: 0px !important; color: #00F0FF !important; }
+.lens-result-action-btn:hover { background-color: #FF003C !important; color: #FFFFFF !important; }
+
+.lens-status-container, .lens-synthesis-reasoning { border-top: 2px solid #00F0FF !important; }
+
+.lens-synthesis-container {
+    background-color: rgba(255, 0, 60, 0.1) !important;
+    border: 1px solid #FF003C !important;
+    border-radius: 0px !important;
+}
+
+.lens-synthesis-badge {
+    background-color: #FF003C !important;
+    color: #FFFFFF !important;
+    border-radius: 0px !important;
+    text-transform: uppercase !important;
+}

@@ -1,0 +1,165 @@
+/* gnome-extension/themes/sapphire.css */
+/* ========================================================================
+ * GNOME LENS THEME: SAPPHIRE OCEAN
+ * ========================================================================
+ * A deep, immersive blue aesthetic. 
+ * Features deep navy backgrounds, vibrant cyan highlights, icy blue text,
+ * and a smooth gradient backdrop.
+ * ======================================================================== 
+ */
+
+.lens-backdrop { 
+    background-color: rgba(10, 17, 40, 0.75) !important; 
+}
+
+.lens-dialog {
+    background-image: linear-gradient(135deg, #0A1128, #111D4A) !important;
+    background-color: transparent !important;
+    border: 1px solid #1E3888 !important;
+    border-radius: 16px !important;
+    box-shadow: 0px 15px 45px rgba(0, 187, 249, 0.15) !important;
+}
+
+.lens-search-icon { 
+    color: #00BBF9 !important; 
+}
+
+.lens-entry {
+    color: #E0FBFC !important;
+    font-weight: 500 !important;
+    selection-background-color: rgba(0, 187, 249, 0.4) !important;
+}
+
+.lens-clear-button, .lens-filter-button, .lens-close-button {
+    color: #90E0EF !important;
+}
+
+.lens-clear-button:hover, .lens-filter-button:hover, .lens-filter-button.active, .lens-close-button:hover {
+    background-color: rgba(0, 187, 249, 0.2) !important;
+    color: #00BBF9 !important;
+}
+
+.lens-advanced-filters-box, .lens-filters-box { 
+    border-bottom: 1px solid rgba(30, 56, 136, 0.6) !important; 
+}
+
+.lens-filter-input-box { 
+    background-color: rgba(0, 0, 0, 0.2) !important; 
+    border: 1px solid #1E3888 !important;
+    border-radius: 8px !important; 
+}
+
+.lens-filter-icon { color: #00BBF9 !important; }
+.lens-filter-entry { color: #E0FBFC !important; }
+.lens-filter-date-label { color: #90E0EF !important; font-weight: 600 !important; }
+
+.lens-date-pill, .lens-filter-pill {
+    background-color: rgba(30, 56, 136, 0.4) !important;
+    color: #90E0EF !important;
+    border-radius: 12px !important;
+    border: 1px solid transparent !important;
+}
+
+.lens-date-pill:hover, .lens-date-pill:focus, .lens-filter-pill:hover, .lens-filter-pill:focus {
+    background-color: rgba(0, 187, 249, 0.15) !important;
+    color: #E0FBFC !important;
+    border-color: #00BBF9 !important;
+}
+
+.lens-date-pill.active, .lens-filter-pill.active {
+    background-image: linear-gradient(to right, #00BBF9, #0077B6) !important;
+    background-color: transparent !important;
+    color: #ffffff !important;
+    border: 1px solid #00BBF9 !important;
+    box-shadow: 0px 4px 12px rgba(0, 187, 249, 0.3) !important;
+}
+
+.lens-filter-reset-btn {
+    background-color: rgba(224, 27, 36, 0.1) !important;
+    color: #FF8FAB !important;
+    border-radius: 12px !important;
+    border: 1px solid transparent !important;
+}
+
+.lens-filter-reset-btn:hover, .lens-filter-reset-btn:focus {
+    background-color: rgba(224, 27, 36, 0.25) !important;
+    color: #ffffff !important;
+    border-color: #FF8FAB !important;
+}
+
+.lens-result-group-header { 
+    color: #00BBF9 !important; 
+    letter-spacing: 0.5px !important;
+}
+
+.lens-result-item { 
+    border-radius: 10px !important; 
+    border-left: 3px solid transparent !important;
+}
+
+.lens-result-item:hover { 
+    background-color: rgba(30, 56, 136, 0.3) !important; 
+}
+
+.lens-result-item.selected { 
+    background-color: rgba(0, 187, 249, 0.15) !important; 
+    border-left: 3px solid #00BBF9 !important;
+}
+
+.lens-result-item.irrelevant { 
+    opacity: 0.4 !important; 
+}
+
+.lens-result-title, .lens-synthesis-answer { 
+    color: #E0FBFC !important; 
+    font-weight: 600 !important;
+}
+
+.lens-result-path, .lens-result-path-inline, .lens-result-snippet, .lens-count-label, .lens-synthesis-reasoning { 
+    color: #90E0EF !important; 
+}
+
+.lens-result-folder-pill {
+    background-color: rgba(30, 56, 136, 0.6) !important;
+    border-radius: 10px !important;
+    border: 1px solid rgba(0, 187, 249, 0.2) !important;
+}
+
+.lens-result-folder-pill-text { 
+    color: #E0FBFC !important; 
+}
+
+.lens-result-ai-reasoning, .lens-status-label { 
+    color: #48CAE4 !important; 
+}
+
+.lens-result-item.irrelevant .lens-result-ai-reasoning { 
+    color: #FF8FAB !important; 
+}
+
+.lens-result-action-btn { 
+    color: #90E0EF !important; 
+}
+
+.lens-result-action-btn:hover { 
+    background-color: rgba(0, 187, 249, 0.2) !important; 
+    color: #E0FBFC !important; 
+}
+
+.lens-status-container, .lens-synthesis-reasoning { 
+    border-top: 1px solid rgba(30, 56, 136, 0.6) !important; 
+}
+
+.lens-synthesis-container {
+    background-color: rgba(10, 17, 40, 0.5) !important;
+    border: 1px solid rgba(0, 187, 249, 0.3) !important;
+    border-radius: 12px !important;
+    box-shadow: inset 0px 0px 20px rgba(0, 119, 182, 0.2) !important;
+}
+
+.lens-synthesis-badge {
+    background-color: rgba(0, 187, 249, 0.2) !important;
+    color: #00BBF9 !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(0, 187, 249, 0.4) !important;
+}

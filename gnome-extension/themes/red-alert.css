@@ -1,0 +1,156 @@
+.lens-backdrop { 
+    background-color: rgba(40, 0, 0, 0.8) !important; 
+}
+
+.lens-dialog {
+    background-color: #1a0000 !important;
+    border: 2px solid #ff0000 !important;
+    border-radius: 8px !important;
+    box-shadow: 0px 0px 50px rgba(255, 0, 0, 0.4) !important;
+}
+
+.lens-search-icon { 
+    color: #ff0000 !important; 
+}
+
+.lens-entry {
+    color: #ffffff !important;
+    font-weight: 800 !important;
+    selection-background-color: rgba(255, 0, 0, 0.5) !important;
+}
+
+.lens-clear-button, .lens-filter-button, .lens-close-button {
+    color: #ff6666 !important;
+    border-radius: 4px !important;
+}
+
+.lens-clear-button:hover, .lens-filter-button:hover, .lens-filter-button.active, .lens-close-button:hover {
+    background-color: rgba(255, 0, 0, 0.3) !important;
+    color: #ff0000 !important;
+}
+
+.lens-advanced-filters-box, .lens-filters-box { 
+    border-bottom: 1px solid #ff0000 !important; 
+}
+
+.lens-filter-input-box { 
+    background-color: rgba(255, 0, 0, 0.1) !important; 
+    border: 1px solid #ff0000 !important; 
+    border-radius: 4px !important; 
+}
+
+.lens-filter-icon { color: #ff0000 !important; }
+.lens-filter-entry { color: #ffffff !important; }
+.lens-filter-date-label { color: #ff6666 !important; font-weight: bold !important; }
+
+.lens-date-pill, .lens-filter-pill {
+    background-color: rgba(255, 0, 0, 0.1) !important;
+    color: #ff6666 !important;
+    border-radius: 4px !important;
+    border: 1px solid #ff0000 !important;
+}
+
+.lens-date-pill:hover, .lens-date-pill:focus, .lens-filter-pill:hover, .lens-filter-pill:focus {
+    background-color: rgba(255, 0, 0, 0.3) !important;
+    color: #ffffff !important;
+}
+
+.lens-date-pill.active, .lens-filter-pill.active {
+    background-color: #ff0000 !important;
+    color: #ffffff !important;
+    box-shadow: 0px 0px 10px rgba(255, 0, 0, 0.5) !important;
+}
+
+.lens-filter-reset-btn {
+    background-color: #000000 !important;
+    color: #ff0000 !important;
+    border-radius: 4px !important;
+    border: 1px solid #ff0000 !important;
+}
+
+.lens-filter-reset-btn:hover, .lens-filter-reset-btn:focus {
+    background-color: #ff0000 !important;
+    color: #ffffff !important;
+}
+
+.lens-result-group-header { 
+    color: #ff4d4d !important; 
+    text-transform: uppercase !important; 
+    font-weight: 900 !important; 
+    letter-spacing: 2px !important; 
+}
+
+.lens-result-item { 
+    border-radius: 4px !important; 
+    border-left: 4px solid transparent !important; 
+}
+
+.lens-result-item:hover { 
+    background-color: rgba(255, 0, 0, 0.1) !important; 
+}
+
+.lens-result-item.selected { 
+    background-color: rgba(255, 0, 0, 0.2) !important; 
+    border-left: 4px solid #ff0000 !important; 
+}
+
+.lens-result-item.irrelevant { 
+    opacity: 0.5 !important; 
+}
+
+.lens-result-title, .lens-synthesis-answer { 
+    color: #ffffff !important; 
+    font-weight: bold !important; 
+}
+
+.lens-result-path, .lens-result-path-inline, .lens-result-snippet, .lens-count-label, .lens-synthesis-reasoning { 
+    color: #ff9999 !important; 
+}
+
+.lens-result-folder-pill {
+    background-color: rgba(255, 0, 0, 0.2) !important;
+    border: 1px solid #ff0000 !important;
+    border-radius: 4px !important;
+}
+
+.lens-result-folder-pill-text { 
+    color: #ffffff !important; 
+}
+
+.lens-result-ai-reasoning, .lens-status-label { 
+    color: #ffcc00 !important; /* Warning Yellow */ 
+    font-weight: bold !important;
+}
+
+.lens-result-item.irrelevant .lens-result-ai-reasoning { 
+    color: #ff0000 !important; 
+}
+
+.lens-result-action-btn { 
+    color: #ff6666 !important; 
+    border-radius: 4px !important;
+}
+
+.lens-result-action-btn:hover { 
+    background-color: #ff0000 !important; 
+    color: #ffffff !important; 
+}
+
+.lens-status-container, .lens-synthesis-reasoning { 
+    border-top: 1px solid #ff0000 !important; 
+}
+
+.lens-synthesis-container {
+    background-color: rgba(255, 0, 0, 0.05) !important;
+    border: 1px solid #ff0000 !important;
+    border-radius: 4px !important;
+    box-shadow: inset 0px 0px 20px rgba(255, 0, 0, 0.2) !important;
+}
+
+.lens-synthesis-badge {
+    background-color: #ff0000 !important;
+    color: #ffffff !important;
+    border-radius: 4px !important;
+    text-transform: uppercase !important;
+    font-weight: bold !important;
+}

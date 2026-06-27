@@ -1,4 +1,6 @@
-/* gnome-extension/stylesheet.css */
+/* ========================================================================
+ * 1. BACKDROP AND CORE DIALOG
+ * ======================================================================== */
 .lens-backdrop {
     background-color: rgba(0, 0, 0, 0.4);
 }
@@ -11,77 +13,16 @@
     padding: 8px;
 }
 
+/* ========================================================================
+ * 2. PRIMARY SEARCH BAR (TOP)
+ * ======================================================================== */
 .lens-entry-container {
     padding: 12px 16px;
 }
 
-.lens-advanced-filters-box {
-    padding: 0px 16px 16px 16px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.lens-filter-input-box {
-    background-color: rgba(255, 255, 255, 0.05);
-    border-radius: 8px;
-    padding: 6px 10px;
-}
-
-.lens-filter-icon {
-    color: rgba(255, 255, 255, 0.4);
-}
-
-.lens-filter-entry {
-    color: rgba(255, 255, 255, 0.9);
-    background-color: transparent;
-    border: none;
-    box-shadow: none;
-    font-size: 10.5pt;
-}
-
-.lens-filter-entry:focus {
-    border: none;
-    box-shadow: none;
-}
-
-.lens-filters-box {
-    padding: 8px 16px 16px 16px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.lens-filter-pill, .lens-date-pill {
-    padding: 6px 16px;
-    border-radius: 16px;
-    background-color: rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.6);
-    font-size: 10.5pt;
-    font-weight: 700;
-    transition-duration: 150ms;
-}
-
-.lens-filter-pill:hover, .lens-filter-pill:focus,
-.lens-date-pill:hover, .lens-date-pill:focus {
-    background-color: rgba(255, 255, 255, 0.2);
-    color: #ffffff;
-}
-
-.lens-filter-pill.active, .lens-date-pill.active {
-    background-color: rgba(53, 132, 228, 0.9);
-    color: #ffffff;
-}
-
-.lens-filter-reset-btn {
-    padding: 6px 16px;
-    border-radius: 16px;
-    background-color: rgba(224, 27, 36, 0.15);
-    color: #ff7b63;
-    font-size: 10.5pt;
-    font-weight: 700;
-    transition-duration: 150ms;
-}
-
-.lens-filter-reset-btn:hover, .lens-filter-reset-btn:focus {
-    background-color: rgba(224, 27, 36, 0.3);
-    color: #ffffff;
+.lens-search-icon {
+    margin-right: 12px;
+    color: rgba(255, 255, 255, 0.5);
 }
 
 .lens-entry {
@@ -99,6 +40,7 @@
     box-shadow: none;
 }
 
+/* Auxiliary Buttons on the Search Bar (Clear, Filter Toggle, Close) */
 .lens-clear-button {
     padding: 6px;
     border-radius: 24px;
@@ -134,6 +76,119 @@
     color: #ffffff;
 }
 
+/* ========================================================================
+ * 3. ADVANCED SEARCH FILTERS (HIDDEN BY DEFAULT)
+ * ======================================================================== */
+.lens-advanced-filters-box {
+    padding: 0px 16px 16px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.lens-advanced-filters-row {
+    spacing: 12px;
+}
+
+.lens-filter-input-box {
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+
+.lens-filter-icon {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.lens-filter-entry {
+    color: rgba(255, 255, 255, 0.9);
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    font-size: 10.5pt;
+}
+
+.lens-filter-entry:focus {
+    border: none;
+    box-shadow: none;
+}
+
+/* Date Pills and Filtering Rules */
+.lens-filter-date-label {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 10pt;
+    margin-right: 12px;
+}
+
+.lens-date-pills-box {
+    spacing: 8px;
+}
+
+.lens-date-pill {
+    padding: 6px 16px;
+    border-radius: 16px;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 10.5pt;
+    font-weight: 700;
+    transition-duration: 150ms;
+}
+
+.lens-date-pill:hover, .lens-date-pill:focus {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+}
+
+.lens-date-pill.active {
+    background-color: rgba(53, 132, 228, 0.9);
+    color: #ffffff;
+}
+
+.lens-filter-reset-btn {
+    padding: 6px 16px;
+    border-radius: 16px;
+    background-color: rgba(224, 27, 36, 0.15);
+    color: #ff7b63;
+    font-size: 10.5pt;
+    font-weight: 700;
+    transition-duration: 150ms;
+}
+
+.lens-filter-reset-btn:hover, .lens-filter-reset-btn:focus {
+    background-color: rgba(224, 27, 36, 0.3);
+    color: #ffffff;
+}
+
+/* ========================================================================
+ * 4. RESULTS FILTER PILLS (ALL, APPS, FILES, FOLDERS)
+ * ======================================================================== */
+.lens-filters-box {
+    padding: 8px 16px 16px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    spacing: 10px;
+}
+
+.lens-filter-pill {
+    padding: 6px 16px;
+    border-radius: 16px;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 10.5pt;
+    font-weight: 700;
+    transition-duration: 150ms;
+}
+
+.lens-filter-pill:hover, .lens-filter-pill:focus {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+}
+
+.lens-filter-pill.active {
+    background-color: rgba(53, 132, 228, 0.9);
+    color: #ffffff;
+}
+
+/* ========================================================================
+ * 5. SEARCH RESULTS LISTING
+ * ======================================================================== */
 .lens-results-scroll {
     padding-top: 8px;
 }
@@ -227,6 +282,7 @@
     color: #f08f8f;
 }
 
+/* Secondary Open/Action Buttons */
 .lens-result-action-box {
     spacing: 8px;
     padding-left: 12px;
@@ -244,6 +300,9 @@
     color: #ffffff;
 }
 
+/* ========================================================================
+ * 6. STATUS BAR AND LLM SYNTHESIS
+ * ======================================================================== */
 .lens-status-container {
     padding: 12px 16px;
     border-top: 1px solid rgba(255, 255, 255, 0.05);
@@ -254,6 +313,13 @@
     color: #8ff0a4;
     font-size: 11pt;
     font-weight: 500;
+}
+
+.lens-count-label {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 11pt;
+    font-weight: 600;
+    margin-right: 8px;
 }
 
 .lens-synthesis-container {
@@ -285,11 +351,4 @@
     font-style: italic;
     padding-top: 8px;
     border-top: 1px dashed rgba(255, 255, 255, 0.1);
-}
-
-.lens-count-label {
-    color: rgba(255, 255, 255, 0.4);
-    font-size: 11pt;
-    font-weight: 600;
-    margin-right: 8px;
 }
