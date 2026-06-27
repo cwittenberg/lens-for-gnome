@@ -1,12 +1,3 @@
-/* gnome-extension/themes/cyberpunk.css */
-/* ========================================================================
- * GNOME LENS THEME: CYBERPUNK 2077
- * ========================================================================
- * High contrast, aggressive neon colors, sharp edges.
- * Uses a palette of Hot Pink, Cyan, and Neon Yellow over deep dark blue.
- * ======================================================================== 
- */
-
 .lens-backdrop { background-color: rgba(5, 5, 15, 0.7) !important; }
 
 .lens-dialog {

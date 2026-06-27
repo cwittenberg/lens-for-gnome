@@ -1,12 +1,3 @@
-/* gnome-extension/themes/gnome-light.css */
-/* ========================================================================
- * GNOME LENS THEME: GNOME LIGHT (ADWAITA)
- * ========================================================================
- * Clean, bright, and perfectly integrated with GNOME's native light mode.
- * Features frosted white backgrounds, sharp dark grey text, and blue accents.
- * ======================================================================== 
- */
-
 .lens-backdrop { background-color: rgba(0, 0, 0, 0.2) !important; }
 
 .lens-dialog {

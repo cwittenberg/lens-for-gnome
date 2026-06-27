@@ -1,13 +1,3 @@
-/* gnome-extension/themes/synthwave.css */
-/* ========================================================================
- * GNOME LENS THEME: SYNTHWAVE
- * ========================================================================
- * A retro-futuristic, Outrun-inspired aesthetic.
- * Uses deep purple/magenta linear gradients, glowing cyan text, 
- * and hot pink accents.
- * ======================================================================== 
- */
-
 .lens-backdrop { 
     background-color: rgba(26, 11, 46, 0.7) !important; 
 }

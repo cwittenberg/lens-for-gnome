@@ -1,13 +1,3 @@
-/* gnome-extension/themes/matrix.css */
-/* ========================================================================
- * GNOME LENS THEME: THE MATRIX
- * ========================================================================
- * "Wake up, Neo..."
- * Features: Pure black backgrounds, neon green text, sharp corners, 
- * monospace fonts, and glowing selection states.
- * ======================================================================== 
- */
-
 .lens-backdrop { background-color: rgba(0, 0, 0, 0.8) !important; }
 
 .lens-dialog {

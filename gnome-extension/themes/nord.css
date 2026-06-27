@@ -1,12 +1,3 @@
-/* gnome-extension/themes/nord.css */
-/* ========================================================================
- * GNOME LENS THEME: NORD
- * ========================================================================
- * An arctic, north-bluish clean and elegant theme.
- * Focuses on smooth greys, frosty blues, and soft transitions.
- * ======================================================================== 
- */
-
 .lens-backdrop { background-color: rgba(46, 52, 64, 0.6) !important; }
 
 .lens-dialog {
