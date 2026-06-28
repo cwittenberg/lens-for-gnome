@@ -378,7 +378,7 @@ impl SystemRouter {
             },
             
             LlmIntent::FilterAst => {
-                send_chunk(serde_json::json!({"status": "filtering", "message": "Compiling Logic AST..."}).to_string());
+                send_chunk(serde_json::json!({"status": "filtering", "message": "Compiling logic..."}).to_string());
                 
                 let schema_keys = self.store.get_available_metadata_keys();
                 let generated_ast = self.llm.compile_query_to_ast(&search_query.raw_text, schema_keys, Arc::clone(&is_cancelled));
@@ -428,7 +428,7 @@ impl SystemRouter {
             },
 
             LlmIntent::FilterScript => {
-                send_chunk(serde_json::json!({"status": "filtering", "message": "Compiling Logic Script..."}).to_string());
+                send_chunk(serde_json::json!({"status": "filtering", "message": "Reasoning..."}).to_string());
                 
                 let schema_keys = self.store.get_available_metadata_keys();
                 let mut generated_script = self.llm.compile_query_to_script(&search_query.raw_text, schema_keys.clone(), Arc::clone(&is_cancelled));
@@ -442,7 +442,7 @@ impl SystemRouter {
                     
                     match engine.compile(&generated_script) {
                         Ok(ast) => {
-                            send_chunk(serde_json::json!({"status": "filtering", "message": format!("Validating semantic logic (Attempt {})...", attempt)}).to_string());
+                            send_chunk(serde_json::json!({"status": "filtering", "message": format!("Validating logic (attempt {})...", attempt)}).to_string());
                             
                             let eval_result = self.llm.evaluate_script_logic(&search_query.raw_text, &generated_script, schema_keys.clone(), Arc::clone(&is_cancelled));
                             
@@ -475,7 +475,7 @@ impl SystemRouter {
                 if let Some(ast) = final_ast {
                     send_chunk(serde_json::json!({
                         "status": "filtering", 
-                        "message": format!("Executing Validated Script:\n{}", generated_script)
+                        "message": format!("Executing:\n{}", generated_script)
                     }).to_string());
                     
                     let mut ast_results = fast_results.clone();
@@ -492,7 +492,7 @@ impl SystemRouter {
                             doc.ai_reasoning = survivor.ai_reasoning.clone();
                         } else {
                             doc.ai_matched = Some(false);
-                            doc.ai_reasoning = Some("Excluded by validated execution script".to_string());
+                            doc.ai_reasoning = Some("Excluded by AI".to_string());
                         }
                     }
                     

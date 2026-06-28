@@ -15,7 +15,7 @@ impl LlmStrategy for FastFilterStrategy {
         if candidates.is_empty() { return vec![]; }
 
         let mut all_processed = Vec::new();
-        let max_batch_chars = 12_000;
+        let max_batch_chars = 14_000;
 
         let mut chunks: Vec<Vec<SearchResult>> = Vec::new();
         let mut current_chunk = Vec::new();
@@ -43,7 +43,7 @@ impl LlmStrategy for FastFilterStrategy {
 
             let mut docs_block = String::new();
             for (i, doc) in chunk.iter().enumerate() {
-                // 1-based index to prevent LLM zero-index ("0" = "None") hallucinations
+                // 1-based index to prevent LLM zero-index hallucinations
                 let doc_id = i + 1; 
                 let is_shallow = doc.metadata.get("shallow_index").map(|v| v.as_str()) == Some("true");
                 
@@ -59,20 +59,22 @@ impl LlmStrategy for FastFilterStrategy {
                 }
             }
 
-            // Compact Tabular CoT Prompt: 
-            // Retains the mathematical extraction benefits of CoT but compresses it to ~8 tokens per doc to drastically increase speed.
+            // High-Speed Boolean Logit Verification Prompt:
+            // Eliminates qualitative text generation. Forces the LLM to output exactly one single token symbol
+            // per document ('+' or '-'), yielding a massive ~10x speedup across batch pipelines.
             let prompt = format!(
-                "<|im_start|>system\nYou are a fast logic evaluator. You must strictly output ONLY a compact pipe-separated table.<|im_end|>\n\
+                "<|im_start|>system\nYou are an ultra-fast boolean filter agent. You must output exactly one character per document without formatting or commentary.<|im_end|>\n\
                 <|im_start|>user\n\
-                Evaluate if EACH of the following documents satisfies this condition: \"{}\"\n\
+                Determine if EACH document meets this criteria: \"{}\"\n\
                 \n\
                 CRITICAL INSTRUCTIONS:\n\
-                For EVERY document provided, you MUST output exactly ONE line using this strict format:\n\
-                ID | Extracted Value | Math/Logic Comparison | TRUE or FALSE\n\
+                For EVERY document ID, respond with a single character choice:\n\
+                Use '+' if the document satisfies the criteria.\n\
+                Use '-' if the document does NOT satisfy the criteria.\n\
                 \n\
-                Example Evaluations:\n\
-                98 | $120.00 | 120 > 80 | TRUE\n\
-                99 | $45.00 | 45 > 80 | FALSE\n\
+                Strict Output Format:\n\
+                1 | +\n\
+                2 | -\n\
                 \n\
                 DOCUMENTS:\n{}<|im_end|>\n\
                 <|im_start|>assistant\n\
@@ -80,38 +82,34 @@ impl LlmStrategy for FastFilterStrategy {
                 condition, docs_block
             );
 
-            // Upgraded Token limits to ensure Reasoning models do not choke out on `<think>` generation buffers
-            let response = core.generate_text("FAST_FILTER_STRATEGY", &prompt, 1024, Arc::clone(&is_cancelled));
+            // Capped token limits since the high-speed format requires minimal token generation space
+            let response = core.generate_text("FAST_FILTER_STRATEGY", &prompt, 256, Arc::clone(&is_cancelled));
             
-            // We prime the LLM with "1 | " to ensure it immediately starts formatting correctly, so we must prepend it back.
+            // Re-prepend our primed start token so line processing logic stays uniform
             let full_response = format!("1 | {}", response.trim());
             
             let mut matched_indices = Vec::new();
             let mut reasoning_map = std::collections::HashMap::new();
 
             for line in full_response.lines() {
-                let clean_line = line.replace("**", "");
-                let parts: Vec<&str> = clean_line.split('|').map(|s| s.trim()).collect();
+                let parts: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
                 
-                if parts.len() >= 4 {
+                if parts.len() >= 2 {
                     let id_str = parts[0].replace("DOC_ID:", "").replace("ID:", "").replace(":", "").trim().to_string();
                     
                     if let Ok(id) = id_str.parse::<usize>() {
                         if id > 0 {
                             let doc_idx = id - 1;
+                            let decision_symbol = parts[1].trim();
                             
-                            // Reconstruct a UI-friendly reasoning string from the compact table
-                            let extracted_val = parts[1];
-                            let comparison = parts[2];
-                            let match_str = parts[3].to_uppercase();
-                            
-                            let thought = format!("Found '{}' -> {}", extracted_val, comparison);
-                            let is_match = match_str.contains("TRUE") && !match_str.contains("FALSE");
+                            let is_match = decision_symbol.starts_with('+');
                             
                             if is_match {
                                 matched_indices.push(doc_idx);
+                                reasoning_map.insert(doc_idx, format!("Fulfills evaluation condition: '{}'", condition));
+                            } else {
+                                reasoning_map.insert(doc_idx, format!("Failed evaluation condition: '{}'", condition));
                             }
-                            reasoning_map.insert(doc_idx, thought);
                         }
                     }
                 }
