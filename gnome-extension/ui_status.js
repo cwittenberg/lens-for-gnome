@@ -1,4 +1,3 @@
-// gnome-extension/ui_status.js
 import GLib from 'gi://GLib';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';

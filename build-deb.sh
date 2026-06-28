@@ -4,7 +4,7 @@
 set -euo pipefail
 
 # 1. Project Definitions
-PACKAGE_NAME="gnome-lens"
+PACKAGE_NAME="lens-for-gnome"
 VERSION="1.0.0"
 ARCHITECTURE="amd64"
 MAINTAINER="Your Name <your.email@example.com>"
@@ -35,20 +35,39 @@ mkdir -p "${BUILD_ROOT}/usr/lib/systemd/user"
 mkdir -p "${BUILD_ROOT}/usr/share/applications"
 
 # Copy verified compilation artifacts
-cp target/release/gnome-lens "${BUILD_ROOT}/usr/bin/gnome-lens"
-chmod 755 "${BUILD_ROOT}/usr/bin/gnome-lens"
+cp target/release/lens-for-gnome "${BUILD_ROOT}/usr/bin/lens-for-gnome"
+chmod 755 "${BUILD_ROOT}/usr/bin/lens-for-gnome"
+
+# Copy the GUI Manager App artifact
+cp target/release/lens-for-gnome-manager "${BUILD_ROOT}/usr/bin/lens-for-gnome-manager"
+chmod 755 "${BUILD_ROOT}/usr/bin/lens-for-gnome-manager"
+
+# Generate GUI Application Desktop Entry (AppCenter Compliance)
+cat << 'EOF' > "${BUILD_ROOT}/usr/share/applications/lens-for-gnome-manager.desktop"
+[Desktop Entry]
+Name=Lens for GNOME
+Comment=Service Manager and Log Viewer for Lens for GNOME
+Exec=/usr/bin/lens-for-gnome-manager
+Icon=system-search
+Terminal=false
+Type=Application
+Categories=System;Utility;
+EOF
+
+chmod 644 "${BUILD_ROOT}/usr/share/applications/lens-for-gnome-manager.desktop"
+
 
 # 4. Generate Integrated Systemd Service Block Configuration
 echo "[Stage 4/6] Embedding Systemd User Service unit description..."
-cat << 'EOF' > "${BUILD_ROOT}/usr/lib/systemd/user/gnome-lens.service"
+cat << 'EOF' > "${BUILD_ROOT}/usr/lib/systemd/user/lens-for-gnome.service"
 [Unit]
-Description=Gnome Lens Daemon Engine
-Documentation=https://github.com/yourrepository/gnome-lens
+Description=Lens for GNOME Daemon Engine
+Documentation=https://github.com/cwittenberg/lens-for-gnome
 After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/gnome-lens
+ExecStart=/usr/bin/lens-for-gnome
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal
@@ -58,7 +77,7 @@ StandardError=journal
 WantedBy=default.target
 EOF
 
-chmod 644 "${BUILD_ROOT}/usr/lib/systemd/user/gnome-lens.service"
+chmod 644 "${BUILD_ROOT}/usr/lib/systemd/user/lens-for-gnome.service"
 
 # 5. Provisioning Debian Core Tracking Control Blocks
 echo "[Stage 5/6] Writing Debian package manifest tracking files..."
@@ -69,7 +88,7 @@ Package: ${PACKAGE_NAME}
 Version: ${VERSION}
 Architecture: ${ARCHITECTURE}
 Maintainer: ${MAINTAINER}
-Depends: libc6, tesseract-ocr, tesseract-ocr-eng, ffmpeg, poppler-utils
+Depends: libc6, tesseract-ocr, tesseract-ocr-eng, ffmpeg, poppler-utils, libgtk-4-1
 Description: ${DESCRIPTION}
 EOF
 
@@ -82,13 +101,24 @@ set -e
 
 if [ "$1" = "configure" ]; then
     echo "========================================================================="
-    echo " Gnome Lens daemon successfully integrated into system paths."
-    echo " To enable and execute this background engine under your active account,"
-    echo " run the following instructions within a normal terminal session:"
-    echo ""
-    echo "    systemctl --user daemon-reload"
-    echo "    systemctl --user enable --now gnome-lens.service"
+    echo " Lens for GNOME daemon successfully integrated into system paths."
+    echo " Enabling and starting the service globally for active users..."
     echo "========================================================================="
+    
+    # Enable globally for all users on next login
+    systemctl --global enable lens-for-gnome.service || true
+    
+    # Start for currently logged in users
+    for uid_dir in /run/user/*; do
+        if [ -d "$uid_dir" ]; then
+            uid=$(basename "$uid_dir")
+            user=$(id -un "$uid" 2>/dev/null || true)
+            if [ -n "$user" ]; then
+                sudo -u "$user" XDG_RUNTIME_DIR="$uid_dir" systemctl --user daemon-reload || true
+                sudo -u "$user" XDG_RUNTIME_DIR="$uid_dir" systemctl --user start lens-for-gnome.service || true
+            fi
+        fi
+    done
 fi
 exit 0
 EOF
@@ -104,8 +134,20 @@ set -e
 if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
     if command -v systemctl >/dev/null 2>&1; then
         echo "Deactivating daemon components for active graphical user spaces..."
-        # Gently attempt to terminate all running daemon users
-        systemctl --global disable gnome-lens.service || true
+        
+        # Disable globally
+        systemctl --global disable lens-for-gnome.service || true
+        
+        # Stop for currently logged in users
+        for uid_dir in /run/user/*; do
+            if [ -d "$uid_dir" ]; then
+                uid=$(basename "$uid_dir")
+                user=$(id -un "$uid" 2>/dev/null || true)
+                if [ -n "$user" ]; then
+                    sudo -u "$user" XDG_RUNTIME_DIR="$uid_dir" systemctl --user stop lens-for-gnome.service || true
+                fi
+            fi
+        done
     fi
 fi
 exit 0

@@ -35,12 +35,12 @@ impl RuntimeAdapter {
             RuntimeEnvironment::Flatpak => {
                 // Inside Flatpak, XDG_CONFIG_HOME is redirected to sandboxed app state
                 if let Ok(xdg_config) = env::var("XDG_CONFIG_HOME") {
-                    PathBuf::from(xdg_config).join("gnome-lens")
+                    PathBuf::from(xdg_config).join("lens-for-gnome")
                 } else {
-                    self.home_dir.join(".config/gnome-lens")
+                    self.home_dir.join(".config/lens-for-gnome")
                 }
             }
-            RuntimeEnvironment::Host => self.home_dir.join(".config/gnome-lens"),
+            RuntimeEnvironment::Host => self.home_dir.join(".config/lens-for-gnome"),
         }
     }
 
@@ -49,12 +49,12 @@ impl RuntimeAdapter {
         match self.env_type {
             RuntimeEnvironment::Flatpak => {
                 if let Ok(xdg_data) = env::var("XDG_DATA_HOME") {
-                    PathBuf::from(xdg_data).join("gnome-lens")
+                    PathBuf::from(xdg_data).join("lens-for-gnome")
                 } else {
-                    self.home_dir.join(".local/share/gnome-lens")
+                    self.home_dir.join(".local/share/lens-for-gnome")
                 }
             }
-            RuntimeEnvironment::Host => self.home_dir.join(".local/share/gnome-lens"),
+            RuntimeEnvironment::Host => self.home_dir.join(".local/share/lens-for-gnome"),
         }
     }
 
@@ -63,12 +63,12 @@ impl RuntimeAdapter {
         match self.env_type {
             RuntimeEnvironment::Flatpak => {
                 if let Ok(xdg_state) = env::var("XDG_STATE_HOME") {
-                    PathBuf::from(xdg_state).join("gnome-lens")
+                    PathBuf::from(xdg_state).join("lens-for-gnome")
                 } else {
-                    self.home_dir.join(".local/state/gnome-lens")
+                    self.home_dir.join(".local/state/lens-for-gnome")
                 }
             }
-            RuntimeEnvironment::Host => self.home_dir.join(".local/state/gnome-lens"),
+            RuntimeEnvironment::Host => self.home_dir.join(".local/state/lens-for-gnome"),
         }
     }
 
@@ -80,7 +80,7 @@ impl RuntimeAdapter {
         if Path::new("schemas").exists() {
             cmd.env("GSETTINGS_SCHEMA_DIR", "schemas");
         } else if self.env_type == RuntimeEnvironment::Host {
-            let ext_schema = self.home_dir.join(".local/share/gnome-shell/extensions/gnome-lens@cwittenberg/schemas");
+            let ext_schema = self.home_dir.join(".local/share/gnome-shell/extensions/lens-for-gnome@cwittenberg/schemas");
             if ext_schema.exists() {
                 cmd.env("GSETTINGS_SCHEMA_DIR", ext_schema);
             }

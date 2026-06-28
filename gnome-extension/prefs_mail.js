@@ -1,4 +1,3 @@
-// gnome-extension/prefs_mail.js
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
@@ -7,7 +6,7 @@ import GLib from 'gi://GLib';
 function sendDaemonCommand(payloadObj, onMessage) {
     let cancellable = new Gio.Cancellable();
     let socketClient = new Gio.SocketClient();
-    let socketPath = GLib.get_home_dir() + '/.local/state/gnome-lens/gnome_lens.sock';
+    let socketPath = GLib.get_home_dir() + '/.local/state/lens-for-gnome/lens_for_gnome.sock';
     let address = Gio.UnixSocketAddress.new(socketPath);
 
     const cleanupIPC = (conn, inStream, outStream) => {
@@ -67,7 +66,7 @@ function sendDaemonCommand(payloadObj, onMessage) {
 class MailConfigManager {
     constructor(page) {
         this.page = page;
-        this.configPath = GLib.get_home_dir() + '/.config/gnome-lens/gmail.json';
+        this.configPath = GLib.get_home_dir() + '/.config/lens-for-gnome/gmail.json';
         this.pollId = null;
         this._timeoutIds = [];
         this.buildUI();
@@ -290,7 +289,7 @@ class MailConfigManager {
                 }
             }
         } catch (e) {
-            console.warn('[Gnome Lens] Failed to load Gmail config:', e);
+            console.warn('[Lens for GNOME] Failed to load Gmail config:', e);
         }
     }
 
@@ -342,7 +341,7 @@ class MailConfigManager {
             }));
 
         } catch (e) {
-            console.error('[Gnome Lens] Failed to save Gmail config:', e);
+            console.error('[Lens for GNOME] Failed to save Gmail config:', e);
             this.statusLabel.set_label('Error saving configuration.');
         }
     }
@@ -359,7 +358,7 @@ class MailConfigManager {
             }
             this.statusLabel.set_label('Credentials cleared.');
         } catch (e) {
-            console.warn('[Gnome Lens] Failed to clear config file:', e);
+            console.warn('[Lens for GNOME] Failed to clear config file:', e);
         }
     }
 

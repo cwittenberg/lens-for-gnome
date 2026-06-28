@@ -1,4 +1,3 @@
-// gnome-extension/ui_search.js
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import St from 'gi://St';

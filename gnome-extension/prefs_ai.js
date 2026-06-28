@@ -1,4 +1,3 @@
-// gnome-extension/prefs_ai.js
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
@@ -79,7 +78,7 @@ class AIEngineManager {
         this._cancellables.push(cancellable);
 
         let socketClient = new Gio.SocketClient();
-        let socketPath = GLib.get_home_dir() + '/.local/state/gnome-lens/gnome_lens.sock';
+        let socketPath = GLib.get_home_dir() + '/.local/state/lens-for-gnome/lens_for_gnome.sock';
         let address = Gio.UnixSocketAddress.new(socketPath);
 
         socketClient.connect_async(address, cancellable, (client, res) => {
@@ -128,7 +127,7 @@ class AIEngineManager {
                         try {
                             onMessage(JSON.parse(text));
                         } catch (err) {
-                            console.warn('[Gnome Lens] Invalid JSON in stream:', text);
+                            console.warn('[Lens for GNOME] Invalid JSON in stream:', text);
                         }
                     }
                     this._readLoop(inputStream, outputStream, cancellable, onMessage, connection);
@@ -272,7 +271,8 @@ class AIEngineManager {
         let activeModelId = configData.active_model;
         let models = configData.models || {};
         
-        // Strip out unsupported Microsoft models from the backend list if they accidentally arrive
+        // Strip out unsupported Microsoft models from the backend list
+        // These models seriously do not work (!). TODO: add a note in the prefs app to inform the user of it
         for (let key in models) {
             let name = (models[key].name || '').toLowerCase();
             if (name.includes('microsoft') || key.includes('phi') || key.includes('microsoft')) {

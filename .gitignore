@@ -9,4 +9,3 @@ logs.txt
 .flatpak-builder
 dist
 build-dir
-repo

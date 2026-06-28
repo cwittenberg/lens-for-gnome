@@ -1,0 +1,17 @@
+# lens-for-gnome.service
+[Unit]
+Description=Lens for GNOME Vector Search Daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/lens-for-gnome
+Restart=on-failure
+RestartSec=5
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

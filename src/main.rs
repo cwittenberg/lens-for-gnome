@@ -27,7 +27,7 @@ use crate::triggers::{INotifyTrigger, IndexTrigger, GmailSyncDaemon};
 fn get_gsettings_bool(adapter: &RuntimeAdapter, key: &str) -> bool {
     if let Ok(output) = adapter.build_gsettings_cmd()
         .arg("get")
-        .arg("org.gnome.shell.extensions.gnome-lens")
+        .arg("org.gnome.shell.extensions.lens-for-gnome")
         .arg(key)
         .output()
     {
@@ -42,7 +42,7 @@ fn get_gsettings_bool(adapter: &RuntimeAdapter, key: &str) -> bool {
 fn get_gsettings_int(adapter: &RuntimeAdapter, key: &str, default: usize) -> usize {
     if let Ok(output) = adapter.build_gsettings_cmd()
         .arg("get")
-        .arg("org.gnome.shell.extensions.gnome-lens")
+        .arg("org.gnome.shell.extensions.lens-for-gnome")
         .arg(key)
         .output()
     {
@@ -63,7 +63,7 @@ fn get_gsettings_int(adapter: &RuntimeAdapter, key: &str, default: usize) -> usi
 fn get_gsettings_array(adapter: &RuntimeAdapter, key: &str) -> Vec<String> {
     if let Ok(output) = adapter.build_gsettings_cmd()
         .arg("get")
-        .arg("org.gnome.shell.extensions.gnome-lens")
+        .arg("org.gnome.shell.extensions.lens-for-gnome")
         .arg(key)
         .output()
     {
@@ -158,14 +158,14 @@ fn main() -> std::io::Result<()> {
         fs::create_dir_all(&data_dir).expect("Failed to create secure data directory");
     }
 
-    let db_path = format!("{}/gnome-lens.db", data_dir);
+    let db_path = format!("{}/lens-for-gnome.db", data_dir);
 
     let state_dir = runtime_adapter.state_dir().to_string_lossy().to_string();
     if !Path::new(&state_dir).exists() {
         fs::create_dir_all(&state_dir).expect("Failed to create secure state directory");
     }
     
-    let socket_path = format!("{}/gnome_lens.sock", state_dir);
+    let socket_path = format!("{}/lens_for_gnome.sock", state_dir);
 
     let max_depth = get_gsettings_int(&runtime_adapter, "index-max-depth", 3);
 
@@ -186,7 +186,7 @@ fn main() -> std::io::Result<()> {
                 let pipeline = IngestionPipeline::new(Arc::clone(&vector_store), &config_dir, blacklist, Arc::clone(&runtime_adapter));
                 pipeline.run_indexer(vec![target_dir.clone()], max_depth);
             } else {
-                eprintln!("Error: Please provide a directory path. Usage: gnome-lens {} /path/to/dir", command);
+                eprintln!("Error: Please provide a directory path. Usage: lens-for-gnome {} /path/to/dir", command);
             }
             return Ok(());
         } else {
@@ -293,7 +293,7 @@ fn main() -> std::io::Result<()> {
         Box::new(INotifyTrigger),
     ];
 
-    println!("Loading Gnome Lens Triggers:");
+    println!("Loading Lens for GNOME Triggers:");
     for trigger in &index_triggers {
         println!("    {}", trigger.name());
         trigger.start(target_directories.clone(), max_depth, Arc::clone(&pipeline));
@@ -306,7 +306,7 @@ fn main() -> std::io::Result<()> {
         Box::new(VectorSearchPlugin::new(Arc::clone(&vector_store))),
     ];
 
-    println!("Loading Gnome Lens Plugins:");
+    println!("Loading Lens for GNOME Plugins:");
     for plugin in &plugins {
         println!("    {} [{}]", plugin.name(), plugin.id());
     }
@@ -325,7 +325,7 @@ fn main() -> std::io::Result<()> {
 
     let pool = ThreadPool::new(4);
 
-    println!("Gnome Lens Daemon running securely on {}", socket_path);
+    println!("Lens for GNOME Daemon running securely on {}", socket_path);
 
     for stream in listener.incoming() {
         match stream {

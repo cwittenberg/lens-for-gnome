@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Gnome Lens Indexing Service
-Comment=Secure local AI semantic search ingestion engine
-Exec=gnome-lens-daemon
-X-GNOME-Autostart-enabled=true
-X-Flatpak=org.gnome.Lens
-NoDisplay=true

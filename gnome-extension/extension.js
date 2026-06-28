@@ -8,10 +8,10 @@ import { GnomeLensIndicator } from './indicator.js';
 
 export default class GnomeLensExtension extends Extension {
     enable() {
-        this._settings = this.getSettings('org.gnome.shell.extensions.gnome-lens');
+        this._settings = this.getSettings('org.gnome.shell.extensions.lens-for-gnome');
         this._ui = null;
         this._indicator = new GnomeLensIndicator(this, this._settings);
-        Main.panel.addToStatusArea('gnome-lens', this._indicator);
+        Main.panel.addToStatusArea('lens-for-gnome', this._indicator);
 
         this._settings.connectObject('changed::shortcut', this._bindShortcut.bind(this), this);
         this._bindShortcut();

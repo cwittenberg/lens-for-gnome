@@ -19,8 +19,8 @@ impl ModelManager {
     /// - Missing fields inside existing default model entries are filled in.
     pub fn setup_model_config() -> Value {
         let home = env::var("HOME").expect("HOME environment variable must be set");
-        let config_dir = format!("{}/.config/gnome-lens", home);
-        let models_dir = format!("{}/.local/share/gnome-lens/models", home);
+        let config_dir = format!("{}/.config/lens-for-gnome", home);
+        let models_dir = format!("{}/.local/share/lens-for-gnome/models", home);
 
         fs::create_dir_all(&config_dir).expect("Failed to create config directory");
         fs::create_dir_all(&models_dir).expect("Failed to create models directory");
@@ -64,7 +64,7 @@ impl ModelManager {
         if let Some(models) = config["models"].as_object_mut() {
             for (_, model) in models.iter_mut() {
                 if let Some(filename) = model["filename"].as_str() {
-                    let path = format!("{}/.local/share/gnome-lens/models/{}", home, filename);
+                    let path = format!("{}/.local/share/lens-for-gnome/models/{}", home, filename);
                     model["is_installed"] = json!(Self::model_file_exists(&path));
                 } else {
                     model["is_installed"] = json!(false);
@@ -97,16 +97,24 @@ impl ModelManager {
 
         let url = model_obj["url"]
             .as_str()
-            .unwrap_or("[https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf)");
+            .unwrap_or("https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf");
+
+        // Gracefully clean markdown formatted links from legacy configs
+        let mut safe_url = url.to_string();
+        if safe_url.starts_with('[') && safe_url.contains("](") {
+            if let Some(idx) = safe_url.find("](") {
+                safe_url = safe_url[idx + 2..].trim_end_matches(')').to_string();
+            }
+        }
 
         let supports_cot = model_obj["supports_cot"]
             .as_bool()
             .unwrap_or_else(|| active_key.to_lowercase().contains("qwen"));
 
         let home = env::var("HOME").expect("HOME environment variable must be set");
-        let model_path = format!("{}/.local/share/gnome-lens/models/{}", home, filename);
+        let model_path = format!("{}/.local/share/lens-for-gnome/models/{}", home, filename);
 
-        (model_path, url.to_string(), supports_cot)
+        (model_path, safe_url, supports_cot)
     }
 
     /// Validates the model exists on disk, falling back to a blocking sync download.
@@ -149,8 +157,16 @@ impl ModelManager {
             .as_str()
             .ok_or_else(|| format!("Model '{}' is missing required field: url", model_id))?;
 
+        // Gracefully clean markdown formatted links from legacy configs
+        let mut safe_url = url.to_string();
+        if safe_url.starts_with('[') && safe_url.contains("](") {
+            if let Some(idx) = safe_url.find("](") {
+                safe_url = safe_url[idx + 2..].trim_end_matches(')').to_string();
+            }
+        }
+
         let home = env::var("HOME").map_err(|_| "HOME environment variable must be set".to_string())?;
-        let model_path = format!("{}/.local/share/gnome-lens/models/{}", home, filename);
+        let model_path = format!("{}/.local/share/lens-for-gnome/models/{}", home, filename);
 
         if Self::model_file_exists(&model_path) {
             return Ok(model_path);
@@ -174,7 +190,7 @@ impl ModelManager {
             .arg("-#")
             .arg("-o")
             .arg(&temp_model_path)
-            .arg(url)
+            .arg(&safe_url)
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to start curl: {}", e))?;
@@ -262,7 +278,7 @@ impl ModelManager {
     /// Persists the active model selection to the config block.
     pub fn set_active_model(model_id: &str) -> Result<(), String> {
         let home = env::var("HOME").map_err(|_| "HOME environment variable must be set".to_string())?;
-        let config_path = format!("{}/.config/gnome-lens/models.json", home);
+        let config_path = format!("{}/.config/lens-for-gnome/models.json", home);
 
         let mut parsed = Self::setup_model_config();
 
@@ -297,7 +313,7 @@ impl ModelManager {
             .ok_or_else(|| "Missing filename for model.".to_string())?;
         
         let home = env::var("HOME").unwrap_or_default();
-        let path = format!("{}/.local/share/gnome-lens/models/{}", home, filename);
+        let path = format!("{}/.local/share/lens-for-gnome/models/{}", home, filename);
         
         if Path::new(&path).exists() {
             fs::remove_file(&path).map_err(|e| e.to_string())?;
@@ -313,7 +329,7 @@ impl ModelManager {
                 "qwen-2.5-3b": {
                     "name": "Qwen 2.5 (3B)",
                     "filename": "qwen2.5-3b-instruct-q4_k_m.gguf",
-                    "url": "[https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf)",
+                    "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
                     "size_gb": 1.9,
                     "ram_required_gb": 2.8,
                     "parameters": "3.0B",
@@ -326,7 +342,7 @@ impl ModelManager {
                 "qwen3-4b-q4-k-m": {
                     "name": "Qwen 3 (4B)",
                     "filename": "Qwen3-4B-Q4_K_M.gguf",
-                    "url": "[https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf)",
+                    "url": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
                     "size_gb": 2.6,
                     "ram_required_gb": 4.5,
                     "parameters": "4.0B",
@@ -339,7 +355,7 @@ impl ModelManager {
                 "nemotron-mini-4b-q4-k-m": {
                     "name": "NVIDIA Nemotron Mini 4B Instruct",
                     "filename": "Nemotron-Mini-4B-Instruct-Q4_K_M.gguf",
-                    "url": "[https://huggingface.co/bartowski/Nemotron-Mini-4B-Instruct-GGUF/resolve/main/Nemotron-Mini-4B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Nemotron-Mini-4B-Instruct-GGUF/resolve/main/Nemotron-Mini-4B-Instruct-Q4_K_M.gguf)",
+                    "url": "https://huggingface.co/bartowski/Nemotron-Mini-4B-Instruct-GGUF/resolve/main/Nemotron-Mini-4B-Instruct-Q4_K_M.gguf",
                     "size_gb": 2.6,
                     "ram_required_gb": 4.0,
                     "parameters": "4.0B",
@@ -352,7 +368,7 @@ impl ModelManager {
                 "qwen2.5-coder-7b-q4-k-m": {
                     "name": "Qwen 2.5 Coder (7B)",
                     "filename": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
-                    "url": "[https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf)",
+                    "url": "https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
                     "size_gb": 4.68,
                     "ram_required_gb": 7.0,
                     "parameters": "7.0B",
@@ -365,7 +381,7 @@ impl ModelManager {
                 "qwen3-8b-q4-k-m": {
                     "name": "Qwen 3 (8B)",
                     "filename": "Qwen3-8B-Q4_K_M.gguf",
-                    "url": "[https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf](https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf)",
+                    "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
                     "size_gb": 4.7,
                     "ram_required_gb": 7.0,
                     "parameters": "8.2B",
@@ -378,7 +394,7 @@ impl ModelManager {
                 "qwen2.5-coder-14b-q4-k-m": {
                     "name": "Qwen 2.5 Coder (14B)",
                     "filename": "qwen2.5-coder-14b-instruct-q4_k_m.gguf",
-                    "url": "[https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/qwen2.5-coder-14b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/qwen2.5-coder-14b-instruct-q4_k_m.gguf)",
+                    "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/qwen2.5-coder-14b-instruct-q4_k_m.gguf",
                     "size_gb": 8.9,
                     "ram_required_gb": 12.0,
                     "parameters": "14.7B",
@@ -391,7 +407,7 @@ impl ModelManager {
                 "qwen3-14b-q4-k-m": {
                     "name": "Qwen 3 (14B)",
                     "filename": "Qwen3-14B-Q4_K_M.gguf",
-                    "url": "[https://huggingface.co/bartowski/Qwen_Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf)",
+                    "url": "https://huggingface.co/bartowski/Qwen_Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf",
                     "size_gb": 9.0,
                     "ram_required_gb": 13.0,
                     "parameters": "14.8B",
@@ -404,7 +420,7 @@ impl ModelManager {
                 "qwen3-coder-30b-a3b-ud-q4-k-xl": {
                     "name": "Qwen 3 Coder 30B-A3B",
                     "filename": "Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf",
-                    "url": "[https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf](https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf)",
+                    "url": "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf",
                     "size_gb": 17.7,
                     "ram_required_gb": 24.0,
                     "parameters": "30.5B total / 3.3B active",
@@ -417,7 +433,7 @@ impl ModelManager {
                 "devstral-small-2507-q4-k-m": {
                     "name": "Devstral Small 2507",
                     "filename": "Devstral-Small-2507-Q4_K_M.gguf",
-                    "url": "[https://huggingface.co/mistralai/Devstral-Small-2507_gguf/resolve/main/Devstral-Small-2507-Q4_K_M.gguf](https://huggingface.co/mistralai/Devstral-Small-2507_gguf/resolve/main/Devstral-Small-2507-Q4_K_M.gguf)",
+                    "url": "https://huggingface.co/mistralai/Devstral-Small-2507_gguf/resolve/main/Devstral-Small-2507-Q4_K_M.gguf",
                     "size_gb": 14.33,
                     "ram_required_gb": 22.0,
                     "parameters": "24B",

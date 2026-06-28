@@ -36,7 +36,7 @@ impl FileExtractor for PdfExtractor {
         if text.trim().is_empty() {
             // FIX: Use an atomic counter to prevent Rayon worker threads from overwriting each other's temporary files
             let task_id = PDF_COUNTER.fetch_add(1, Ordering::SeqCst);
-            let temp_prefix = format!("/tmp/gnome_lens_pdf_{}_{}", std::process::id(), task_id);
+            let temp_prefix = format!("/tmp/lens_for_gnome_pdf_{}_{}", std::process::id(), task_id);
             
             // Use pdftoppm (poppler-utils) to rasterize PDF pages into temporary image buffers
             if let Ok(output) = Command::new("pdftoppm")
@@ -48,7 +48,7 @@ impl FileExtractor for PdfExtractor {
                 if output.status.success() {
                     if let Ok(entries) = std::fs::read_dir("/tmp") {
                         let mut png_pages = Vec::new();
-                        let prefix_matcher = format!("gnome_lens_pdf_{}_{}", std::process::id(), task_id);
+                        let prefix_matcher = format!("lens_for_gnome_pdf_{}_{}", std::process::id(), task_id);
                         
                         // Gather all generated page buffers
                         for entry in entries.flatten() {

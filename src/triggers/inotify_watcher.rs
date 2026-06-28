@@ -154,7 +154,7 @@ impl IndexTrigger for INotifyTrigger {
                 .collect();
 
             // 1. Diagnostic Kernel Probe
-            let test_dir = std::env::temp_dir().join(format!("gnome_lens_inotify_test_{}", std::process::id()));
+            let test_dir = std::env::temp_dir().join(format!("lens_for_gnome_inotify_test_{}", std::process::id()));
             let _ = std::fs::create_dir_all(&test_dir);
             if watcher.watch(&test_dir, RecursiveMode::NonRecursive).is_ok() {
                 thread::spawn(move || {
@@ -234,7 +234,7 @@ impl IndexTrigger for INotifyTrigger {
                         // while explicitly filtering out pure read accesses to prevent indexing loops.
                         if !matches!(kind, EventKind::Access(_)) {
                             for p in paths {
-                                if p.to_string_lossy().contains("gnome_lens_inotify_test") {
+                                if p.to_string_lossy().contains("lens_for_gnome_inotify_test") {
                                     println!("[INotify] Kernel loopback test successful.");
                                     continue;
                                 }

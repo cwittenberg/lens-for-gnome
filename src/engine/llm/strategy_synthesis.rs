@@ -181,7 +181,7 @@ impl LlmStrategy for SynthesisStrategy {
             "answer": clean_answer,
             "reasoning": final_reasoning,
             "confidence_score": 100,
-            "confidence_justification": "Derived from valid indexed content utilizing a hybrid LLM/Deterministic architecture.",
+            "confidence_justification": "Derived from indexed content",
             "cited_indices": sorted_indices
         })
     }

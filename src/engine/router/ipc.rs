@@ -57,7 +57,7 @@ where
     // ACTION: Return Ingestor Process Status Tracking
     if json["action"].as_str() == Some("get_indexer_status") {
         let home = std::env::var("HOME").unwrap_or_default();
-        let state_file = std::path::Path::new(&home).join(".config/gnome-lens/indexer_state.json");
+        let state_file = std::path::Path::new(&home).join(".config/lens-for-gnome/indexer_state.json");
         
         if let Ok(state_data) = std::fs::read_to_string(&state_file) {
             if let Ok(state_json) = serde_json::from_str::<serde_json::Value>(&state_data) {
@@ -79,7 +79,7 @@ where
     // ACTION: Return Mail Sync Status
     if json["action"].as_str() == Some("get_mail_status") {
         let home = std::env::var("HOME").unwrap_or_default();
-        let state_file = std::path::Path::new(&home).join(".config/gnome-lens/gmail_state.json");
+        let state_file = std::path::Path::new(&home).join(".config/lens-for-gnome/gmail_state.json");
         
         if let Ok(state_data) = std::fs::read_to_string(&state_file) {
             if let Ok(state_json) = serde_json::from_str::<serde_json::Value>(&state_data) {
@@ -101,7 +101,7 @@ where
     // ACTION: Reset Mail Sync State (Force Re-Sync)
     if json["action"].as_str() == Some("mail_resync") {
         let home = std::env::var("HOME").unwrap_or_default();
-        let state_file = std::path::Path::new(&home).join(".config/gnome-lens/gmail_state.json");
+        let state_file = std::path::Path::new(&home).join(".config/lens-for-gnome/gmail_state.json");
         
         // Setting last_uid to 0 forces the Daemon to run the history_years boundary check on its next 60s tick
         let _ = std::fs::write(&state_file, serde_json::json!({
@@ -124,8 +124,8 @@ where
     // ACTION: Wipe Mail Data
     if json["action"].as_str() == Some("mail_wipe") {
         let home = std::env::var("HOME").unwrap_or_default();
-        let mail_dir = std::path::Path::new(&home).join(".local/share/gnome-lens/mail");
-        let state_file = std::path::Path::new(&home).join(".config/gnome-lens/gmail_state.json");
+        let mail_dir = std::path::Path::new(&home).join(".local/share/lens-for-gnome/mail");
+        let state_file = std::path::Path::new(&home).join(".config/lens-for-gnome/gmail_state.json");
 
         // 1. Delete all active .eml files from the disk cache
         if let Ok(entries) = std::fs::read_dir(&mail_dir) {

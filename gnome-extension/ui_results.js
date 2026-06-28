@@ -1,4 +1,3 @@
-// gnome-extension/ui_results.js
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';

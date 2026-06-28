@@ -711,14 +711,14 @@ export const GnomeLensUI = GObject.registerClass({
                             try {
                                 Gio.AppInfo.launch_default_for_uri_finish(res);
                             } catch (e) {
-                                console.warn(`[Gnome Lens] Native async launch failed: ${e}`);
+                                console.warn(`[Lens for GNOME] Native async launch failed: ${e}`);
                             }
                         }
                     );
                 }
             },
-            onError: (e) => console.warn(`[Gnome Lens] Launch IPC error: ${e}`),
-            onOffline: () => console.warn(`[Gnome Lens] Daemon offline during launch.`)
+            onError: (e) => console.warn(`[Lens for GNOME] Launch IPC error: ${e}`),
+            onOffline: () => console.warn(`[Lens for GNOME] Daemon offline during launch.`)
         };
 
         let launchService = new ServiceClient();

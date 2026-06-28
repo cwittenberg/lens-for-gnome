@@ -1,4 +1,3 @@
-// gnome-extension/prefs_about.js
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
@@ -30,7 +29,7 @@ export function buildAboutPage(prefs) {
     const group = new Adw.PreferencesGroup();
 
     const titleRow = new Adw.ActionRow({
-        title: 'Lens for Gnome',
+        title: 'Lens for GNOME',
         subtitle: 'Spotlight-alike intelligent search ensuring you can find locally what you need.',
     });
     group.add(titleRow);
@@ -45,8 +44,8 @@ export function buildAboutPage(prefs) {
     });
     
     linkBox.append(createLinkButton('Buy me a coffee \u2615', 'https://ko-fi.com/cwittenberg', 'suggested-action'));
-    linkBox.append(createLinkButton('Report a Bug \uD83D\uDC1E', 'https://github.com/cwittenberg/gnome-lens/issues/new?template=bug_report.md'));
-    linkBox.append(createLinkButton('Request a Feature \uD83D\uDCA1', 'https://github.com/cwittenberg/gnome-lens/issues/new?template=feature_request.md'));
+    linkBox.append(createLinkButton('Report a Bug \uD83D\uDC1E', 'https://github.com/cwittenberg/lens-for-gnome/issues/new?template=bug_report.md'));
+    linkBox.append(createLinkButton('Request a Feature \uD83D\uDCA1', 'https://github.com/cwittenberg/lens-for-gnome/issues/new?template=feature_request.md'));
     
     group.add(linkBox);
 

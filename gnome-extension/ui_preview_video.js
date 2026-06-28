@@ -1,4 +1,3 @@
-// gnome-extension/ui_preview_video.js
 import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import St from 'gi://St';
@@ -10,7 +9,7 @@ let Gst = null;
 let GstLoaded = false;
 let GstLoadFailed = false;
 
-const HISTORY_FILE = GLib.build_filenamev([GLib.get_user_cache_dir(), 'gnome-lens-playback.json']);
+const HISTORY_FILE = GLib.build_filenamev([GLib.get_user_cache_dir(), 'lens-for-gnome-playback.json']);
 export const PlaybackHistory = new Map();
 let _historyLoadPromise = null;
 
@@ -34,7 +33,7 @@ function ensureHistoryLoaded() {
                     }
                 }
             } catch (e) {
-                console.warn(`[Gnome Lens] Failed to parse playback history: ${e}`);
+                console.warn(`[Lens for GNOME] Failed to parse playback history: ${e}`);
             }
             resolve();
         });
@@ -64,7 +63,7 @@ function savePlaybackHistoryAsync() {
             try {
                 f.replace_contents_finish(res);
             } catch(e) {
-                console.warn(`[Gnome Lens] Failed to write playback history to disk: ${e}`);
+                console.warn(`[Lens for GNOME] Failed to write playback history to disk: ${e}`);
             }
         }
     );
@@ -81,7 +80,7 @@ async function ensureGst() {
         GstLoaded = true;
         return true;
     } catch (e) {
-        console.warn(`[Gnome Lens] GStreamer unavailable. Video playback will use fallback: ${e.message}`);
+        console.warn(`[Lens for GNOME] GStreamer unavailable. Video playback will use fallback: ${e.message}`);
         GstLoadFailed = true;
         return false;
     }
@@ -687,7 +686,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         }
         
         let secondsCounter = Math.floor(this._currentTimeNs / 1000000000);
-        let tempFile = GLib.build_filenamev([GLib.get_tmp_dir(), `gnome-lens-preview-${GLib.uuid_string_random()}.jpg`]);
+        let tempFile = GLib.build_filenamev([GLib.get_tmp_dir(), `lens-for-gnome-preview-${GLib.uuid_string_random()}.jpg`]);
         let cmd = ['ffmpeg', '-y', '-ss', secondsCounter.toString(), '-i', this._filepath, '-vframes', '1', '-q:v', '2', '-vf', 'scale=640:-1', tempFile];
 
         try {

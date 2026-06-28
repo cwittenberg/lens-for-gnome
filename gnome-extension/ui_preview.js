@@ -1,4 +1,3 @@
-// gnome-extension/ui_preview.js
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GObject from 'gi://GObject';

@@ -1,4 +1,3 @@
-// gnome-extension/ui_preview_image.js
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GObject from 'gi://GObject';
@@ -18,7 +17,7 @@ const GnomeLensImagePreview = GObject.registerClass({
             y_align: Clutter.ActorAlign.FILL,
             style: `background-image: url("${uri}"); background-size: contain; background-repeat: no-repeat;`
         });
-        console.log(`[Gnome Lens Debug] GnomeLensImagePreview initialized for ${filepath}`);
+        console.log(`[Lens for GNOME Debug] GnomeLensImagePreview initialized for ${filepath}`);
     }
 });
 

@@ -2,27 +2,28 @@
 # run.sh
 
 echo "=========================================================="
-echo " Gnome Lens - Universal Hardware Auto-Detect Build Script"
+echo " Lens for GNOME - Universal Hardware Auto-Detect Build Script"
 echo "=========================================================="
 
-# Auto-detect missing Vulkan build dependencies
+# Auto-detect missing Vulkan and GTK4 build dependencies
 NEEDS_DEPS=0
 if ! command -v glslangValidator &> /dev/null; then NEEDS_DEPS=1; fi
 if ! command -v cmake &> /dev/null; then NEEDS_DEPS=1; fi
+if ! pkg-config --exists gtk4 &> /dev/null; then NEEDS_DEPS=1; fi
 
 if [ "$NEEDS_DEPS" -eq 1 ] || [[ "$1" == "--setup" ]]; then
-    echo "-> CRITICAL: Missing Vulkan SDK build tools (glslangValidator / SPIR-V). Auto-installing..."
+    echo "-> CRITICAL: Missing SDK build tools (Vulkan / GTK4 / SPIR-V). Auto-installing..."
     if command -v apt-get &> /dev/null; then
         sudo apt-get update
-        sudo apt-get install -y spirv-headers spirv-tools glslang-tools glslang-dev libvulkan-dev cmake build-essential tesseract-ocr ffmpeg poppler-utils
+        sudo apt-get install -y spirv-headers spirv-tools glslang-tools glslang-dev libvulkan-dev cmake build-essential tesseract-ocr ffmpeg poppler-utils libgtk-4-dev pkg-config
     elif command -v dnf &> /dev/null; then
-        sudo dnf install -y spirv-headers spirv-tools glslang glslang-devel vulkan-loader-devel cmake gcc-c++ tesseract ffmpeg poppler-utils
+        sudo dnf install -y spirv-headers spirv-tools glslang glslang-devel vulkan-loader-devel cmake gcc-c++ tesseract ffmpeg poppler-utils gtk4-devel pkgconf-pkg-config
     elif command -v pacman &> /dev/null; then
-        sudo pacman -Syu --needed --noconfirm spirv-headers spirv-tools glslang vulkan-headers vulkan-icd-loader cmake base-devel tesseract tesseract-data-eng ffmpeg poppler
+        sudo pacman -Syu --needed --noconfirm spirv-headers spirv-tools glslang vulkan-headers vulkan-icd-loader cmake base-devel tesseract tesseract-data-eng ffmpeg poppler gtk4 pkgconf
     elif command -v zypper &> /dev/null; then
-        sudo zypper install -y spirv-headers spirv-tools glslang glslang-devel vulkan-devel cmake gcc-c++ tesseract-ocr ffmpeg poppler-tools
+        sudo zypper install -y spirv-headers spirv-tools glslang glslang-devel vulkan-devel cmake gcc-c++ tesseract-ocr ffmpeg poppler-tools gtk4-devel pkgconf
     else
-        echo "Error: Unsupported package manager. Please manually install Vulkan dev tools."
+        echo "Error: Unsupported package manager. Please manually install Vulkan and GTK4 dev tools."
         exit 1
     fi
     echo "-> Dependencies installed. Wiping CMake cache to register new headers..."
@@ -31,7 +32,7 @@ if [ "$NEEDS_DEPS" -eq 1 ] || [[ "$1" == "--setup" ]]; then
 fi
 
 # Ensure state directory exists early so we can track build targets
-STATE_DIR="$HOME/.local/state/gnome-lens"
+STATE_DIR="$HOME/.local/state/lens-for-gnome"
 mkdir -p "$STATE_DIR"
 STATE_FILE="$STATE_DIR/last_hw_target"
 
@@ -94,16 +95,16 @@ else
     echo "-> Hardware target unchanged ($BACKEND_NAME). Skipping cache purge."
 fi
 
-echo "-> Building Gnome Lens (Optimized Release Mode)..."
+echo "-> Building Lens for GNOME (Optimized Release Mode)..."
 cargo build --release $CARGO_FEATURES
 
 echo "-> Stopping any existing instances..."
-killall gnome-lens 2>/dev/null || true
-pkill -f gnome-lens 2>/dev/null || true
+killall lens-for-gnome 2>/dev/null || true
+pkill -f lens-for-gnome 2>/dev/null || true
 
 echo "-> Starting daemon in the background..."
 export DEBUG_VISION_OCR=1
-nohup ./target/release/gnome-lens > "$STATE_DIR/daemon.log" 2>&1 &
+nohup ./target/release/lens-for-gnome > "$STATE_DIR/daemon.log" 2>&1 &
 
 echo "-> Tailing logs (Press Ctrl+C to exit logs, daemon will keep running)..."
 sleep 0.5

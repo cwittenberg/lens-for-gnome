@@ -1,4 +1,3 @@
-// gnome-extension/prefs.js
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import { buildGeneralPage } from './prefs_main.js';
@@ -10,10 +9,9 @@ import { buildAboutPage } from './prefs_about.js';
 
 export default class GnomeLensPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        const settings = this.getSettings('org.gnome.shell.extensions.gnome-lens');
+        const settings = this.getSettings('org.gnome.shell.extensions.lens-for-gnome');
         
-        window.add(buildGeneralPage(settings, window));
-        // Pass the ExtensionPreferences context 'this' down to look & feel to get the path
+        window.add(buildGeneralPage(settings, window));    
         window.add(buildLookAndFeelPage(settings, window, this));
         window.add(buildAIPage(settings, window));
         window.add(buildIndexPage(settings, window));

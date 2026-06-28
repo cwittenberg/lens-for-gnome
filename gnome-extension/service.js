@@ -17,7 +17,7 @@ export default class ServiceClient {
         this._socketClient = new Gio.SocketClient();
         this.callbacks = callbacks || {};
 
-        let socketPath = GLib.get_home_dir() + '/.local/state/gnome-lens/gnome_lens.sock';
+        let socketPath = GLib.get_home_dir() + '/.local/state/lens-for-gnome/lens_for_gnome.sock';
         let address = Gio.UnixSocketAddress.new(socketPath);
 
         this._socketClient.connect_async(address, this._cancellable, (client, res) => {
@@ -78,7 +78,7 @@ export default class ServiceClient {
                     let parsed = JSON.parse(text);
                     if (this.callbacks.onMessage) this.callbacks.onMessage(parsed);
                 } catch (error) {
-                    console.warn(`[Gnome Lens] Ignoring invalid service JSON: ${error}`);
+                    console.warn(`[Lens for GNOME] Ignoring invalid service JSON: ${error}`);
                 }
             }
 

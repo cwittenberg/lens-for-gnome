@@ -1,7 +1,9 @@
+# Cargo.toml
 [package]
-name = "gnome-lens"
+name = "lens-for-gnome"
 version = "0.4.0"
 edition = "2021"
+default-run = "lens-for-gnome"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -20,6 +22,10 @@ notify = "6.1"
 llama-cpp-2 = "0.1"
 encoding_rs = "0.8"
 
+# GUI Manager
+gtk4 = "*"
+glib = "*"
+
 #vision
 image = "0.24" # For image preprocessing and brightness analysis
 rqrr = "0.6" # Pure Rust QR code scanning
@@ -30,8 +36,15 @@ md5 = "0.8.0"
 #script
 rhai = "1.19.0"
 
-
 #mail
 mailparse = "0.14"
 imap = "2.4"
 native-tls = "0.2"
+
+[[bin]]
+name = "lens-for-gnome"
+path = "src/main.rs"
+
+[[bin]]
+name = "lens-for-gnome-manager"
+path = "src/manager.rs"

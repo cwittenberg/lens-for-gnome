@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# gnome-extension/build.sh
 set -euo pipefail
 
-UUID="gnome-lens@cwittenberg"
+UUID="lens-for-gnome@cwittenberg"
 BUILD_DIR="build"
 EXTENSION_DIR="$HOME/.local/share/gnome-shell/extensions/$UUID"
 PROJECT_DIR="$(pwd)"
@@ -21,7 +20,7 @@ mkdir -p "$BUILD_DIR/themes"
 mkdir -p "po"
 
 echo "Validating extension files..."
-for file in metadata.json extension.js ui.js ui_preview.js ui_preview_image.js ui_preview_video.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_mail.js prefs_about.js prefs_look_and_feel.js prefs_dependencies.js schemas/org.gnome.shell.extensions.gnome-lens.gschema.xml; do
+for file in metadata.json extension.js ui.js ui_preview.js ui_preview_image.js ui_preview_video.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_mail.js prefs_about.js prefs_look_and_feel.js prefs_dependencies.js schemas/org.gnome.shell.extensions.lens-for-gnome.gschema.xml; do
     if [ ! -f "$file" ]; then
         echo "Error: $file not found in the current directory. Please make sure all files exist."
         exit 1
@@ -33,8 +32,8 @@ glib-compile-schemas --strict schemas/
 
 echo "Extracting strings and generating translation template..."
 if command -v xgettext &> /dev/null; then
-    xgettext --from-code=UTF-8 --language=JavaScript --keyword=_ --add-comments -o po/gnome-lens.pot extension.js ui.js ui_preview.js ui_preview_image.js ui_preview_video.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_mail.js prefs_about.js prefs_look_and_feel.js prefs_dependencies.js
-    echo "Translation template generated at po/gnome-lens.pot"
+    xgettext --from-code=UTF-8 --language=JavaScript --keyword=_ --add-comments -o po/lens-for-gnome.pot extension.js ui.js ui_preview.js ui_preview_image.js ui_preview_video.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_mail.js prefs_about.js prefs_look_and_feel.js prefs_dependencies.js
+    echo "Translation template generated at po/lens-for-gnome.pot"
 else
     echo "Warning: xgettext not found, skipping string extraction."
 fi
@@ -42,8 +41,8 @@ fi
 echo "Merging and compiling translations..."
 for po_file in po/*.po; do
     if [ -f "$po_file" ]; then
-        if command -v msgmerge &> /dev/null && [ -f "po/gnome-lens.pot" ]; then
-            msgmerge --update --quiet "$po_file" po/gnome-lens.pot
+        if command -v msgmerge &> /dev/null && [ -f "po/lens-for-gnome.pot" ]; then
+            msgmerge --update --quiet "$po_file" po/lens-for-gnome.pot
         fi
 
         if ! command -v msgfmt &> /dev/null; then
@@ -53,7 +52,7 @@ for po_file in po/*.po; do
 
         lang=$(basename "$po_file" .po)
         mkdir -p "$BUILD_DIR/locale/$lang/LC_MESSAGES"
-        msgfmt "$po_file" -o "$BUILD_DIR/locale/$lang/LC_MESSAGES/gnome-lens.mo"
+        msgfmt "$po_file" -o "$BUILD_DIR/locale/$lang/LC_MESSAGES/lens-for-gnome.mo"
         echo "Compiled locale: $lang"
     fi
 done

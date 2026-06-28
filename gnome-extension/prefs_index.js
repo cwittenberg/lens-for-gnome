@@ -1,4 +1,3 @@
-// gnome-extension/prefs_index.js
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
@@ -7,7 +6,7 @@ import GLib from 'gi://GLib';
 function sendDaemonCommand(payloadObj, onMessage) {
     let cancellable = new Gio.Cancellable();
     let socketClient = new Gio.SocketClient();
-    let socketPath = GLib.get_home_dir() + '/.local/state/gnome-lens/gnome_lens.sock';
+    let socketPath = GLib.get_home_dir() + '/.local/state/lens-for-gnome/lens_for_gnome.sock';
     let address = Gio.UnixSocketAddress.new(socketPath);
 
     const cleanupIPC = (conn, inStream, outStream) => {
@@ -66,16 +65,16 @@ function sendDaemonCommand(payloadObj, onMessage) {
 }
 
 function getDaemonExecPath() {
-    let execPath = GLib.find_program_in_path('gnome-lens');
+    let execPath = GLib.find_program_in_path('lens-for-gnome');
     if (execPath) return execPath;
 
     let home = GLib.get_home_dir();
     
     let standardPaths = [
-        home + '/.cargo/bin/gnome-lens',
-        home + '/.local/bin/gnome-lens',
-        home + '/Development/extensions/gnome-lens/target/release/gnome-lens',
-        home + '/Development/extensions/gnome-lens/target/debug/gnome-lens'
+        home + '/.cargo/bin/lens-for-gnome',
+        home + '/.local/bin/lens-for-gnome',
+        home + '/Development/extensions/lens-for-gnome/target/release/lens-for-gnome',
+        home + '/Development/extensions/lens-for-gnome/target/debug/lens-for-gnome'
     ];
 
     for (let p of standardPaths) {
@@ -84,17 +83,17 @@ function getDaemonExecPath() {
 
     try {
         let [success, stdout] = GLib.spawn_command_line_sync(
-            `sh -c "find $HOME/Development $HOME/Projects $HOME/dev $HOME/src $HOME/workspace -maxdepth 5 -type f -name gnome-lens -executable 2>/dev/null | head -n 1"`
+            `sh -c "find $HOME/Development $HOME/Projects $HOME/dev $HOME/src $HOME/workspace -maxdepth 5 -type f -name lens-for-gnome -executable 2>/dev/null | head -n 1"`
         );
         if (success && stdout) {
             let found = new TextDecoder().decode(stdout).trim();
             if (found.length > 0) return found;
         }
     } catch (e) {
-        console.warn("[Gnome Lens] Error dynamically searching for dev binary:", e);
+        console.warn("[Lens for GNOME] Error dynamically searching for dev binary:", e);
     }
     
-    return 'gnome-lens';
+    return 'lens-for-gnome';
 }
 
 export function buildIndexPage(settings, window) {
@@ -116,7 +115,7 @@ export function buildIndexPage(settings, window) {
 
     const serviceGroup = new Adw.PreferencesGroup({ 
          title: 'Background Service Management',
-        description: 'Control the lifecycle of the local Gnome Lens ingestion engine process.'
+        description: 'Control the lifecycle of the local Lens for GNOME ingestion engine process.'
     });
 
     const statusRow = new Adw.ActionRow({

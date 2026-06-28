@@ -25,12 +25,16 @@ impl AppLauncherPlugin {
         let home = std::env::var("HOME").unwrap_or_default();
         
         // Expanded to include Flatpak and Snap system installations
+        // as well as Flatpak /var/run/host sandbox mounts for correct containerized execution
         let paths = vec![
             "/usr/share/applications".to_string(),
             format!("{}/.local/share/applications", home),
             "/var/lib/flatpak/exports/share/applications".to_string(),
             format!("{}/.local/share/flatpak/exports/share/applications", home),
             "/var/lib/snapd/desktop/applications".to_string(),
+            "/var/run/host/usr/share/applications".to_string(),
+            "/var/run/host/var/lib/flatpak/exports/share/applications".to_string(),
+            "/var/run/host/var/lib/snapd/desktop/applications".to_string(),
         ];
 
         for path in paths {

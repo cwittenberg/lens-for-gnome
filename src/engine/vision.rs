@@ -114,7 +114,7 @@ impl VisionEngine {
             safe_img.invert();
         }
         
-        let temp_flattened = format!("/tmp/gnome_lens_flat_{}_{}.png", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst));
+        let temp_flattened = format!("/tmp/lens_for_gnome_flat_{}_{}.png", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst));
         let _ = safe_img.save(&temp_flattened);
 
         let res1 = self.run_tesseract_pass(&temp_flattened, primary_psm);
@@ -139,7 +139,7 @@ impl VisionEngine {
             
             let mut inverted_img = safe_img.clone();
             inverted_img.invert();
-            let temp_inverted = format!("/tmp/gnome_lens_inv_{}_{}.png", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst));
+            let temp_inverted = format!("/tmp/lens_for_gnome_inv_{}_{}.png", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst));
             
             let mut res3 = None;
             if inverted_img.save(&temp_inverted).is_ok() {

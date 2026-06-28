@@ -79,7 +79,7 @@ export const GnomeLensIndicator = GObject.registerClass(
 
         _checkServiceStatus() {
             let socketClient = new Gio.SocketClient();
-            let socketPath = GLib.get_home_dir() + '/.local/state/gnome-lens/gnome_lens.sock';
+            let socketPath = GLib.get_home_dir() + '/.local/state/lens-for-gnome/lens_for_gnome.sock';
             let address = Gio.UnixSocketAddress.new(socketPath);
 
             socketClient.connect_async(address, null, (client, res) => {

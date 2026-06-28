@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
-  <schema id="org.gnome.shell.extensions.gnome-lens" path="/org/gnome/shell/extensions/gnome-lens/">
+  <schema id="org.gnome.shell.extensions.lens-for-gnome" path="/org/gnome/shell/extensions/lens-for-gnome/">
     <key name="shortcut" type="as">
       <default>['&lt;Super&gt;space']</default>
-      <summary>Toggle Gnome Lens shortcut</summary>
-      <description>Shortcut to toggle the Gnome Lens search bar.</description>
+      <summary>Toggle Lens for GNOME shortcut</summary>
+      <description>Shortcut to toggle the Lens for GNOME search bar.</description>
     </key>
     <key name="select-text-on-focus" type="b">
       <default>true</default>
       <summary>Select Text on Open</summary>
-      <description>Automatically select all text in the search bar when opening Gnome Lens.</description>
+      <description>Automatically select all text in the search bar when opening Lens for GNOME.</description>
     </key>
     <key name="show-llm-animations" type="b">
       <default>true</default>
@@ -114,7 +114,7 @@
     <key name="show-backdrop" type="b">
       <default>true</default>
       <summary>Show Screen Backdrop Overlay</summary>
-      <description>Dims the screen behind the Gnome Lens search dialog.</description>
+      <description>Dims the screen behind the Lens for GNOME search dialog.</description>
     </key>
     <key name="ui-animation" type="b">
       <default>true</default>
