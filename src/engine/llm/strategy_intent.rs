@@ -31,7 +31,7 @@ impl LlmStrategy for IntentStrategy {
         ];
         
         let ast_filter_triggers = [
-            "less", "greater", "under", "over", "below", "above", "only", "larger", "smaller", "exactly",
+            "less", "<", ">", "below", "greater", "under", "over", "above", "only", "larger", "smaller", "exactly",
             "without", "excluding", "not", "contains", "containing", "exact",
             "minder", "meer", 
             "unter", "über", 
@@ -83,7 +83,7 @@ impl LlmStrategy for IntentStrategy {
             CRITICAL HIERARCHY OF RULES:\n\
             - PRIORITY A: If the query is a question asking for an explanation, summary, or descriptive answer (e.g., 'how much', 'what', 'how', 'why', 'who', 'when', 'where', 'explain', 'summarize'), answer 4.\n\
             - PRIORITY B: If the query requests regex, patterns, or complex string manipulation (starts/ends with, format), answer 5.\n\
-            - PRIORITY C: If the query contains quantitative filters ('less', 'greater', 'under', 'over') OR literal quotes (\") OR exclusionary words ('not', 'excluding', 'without'), answer 5.\n\
+            - PRIORITY C: If the query contains quantitative filters ('less', 'greater', 'under', 'over', 'below', 'above') OR literal quotes (\") OR exclusionary words ('not', 'excluding', 'without'), answer 5.\n\
             - PRIORITY D: Only if NO filters or questions exist, answer 1.\n\n\
             Query:\n\
             [{}]\n\
