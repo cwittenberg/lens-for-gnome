@@ -6,3 +6,7 @@ gnome-extension/build
 gnome-extension/shexli-report.json
 llm.txt
 logs.txt
+.flatpak-builder
+dist
+build-dir
+repo

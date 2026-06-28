@@ -126,10 +126,10 @@
       <summary>UI Animation Type</summary>
       <description>Type of animation to use (standard, bounce, elastic).</description>
     </key>
-    <key name="ai-filter-strategy" type="s">
-      <default>'auto'</default>
-      <summary>AI Filtering Strategy</summary>
-      <description>Sets the preferred execution path for complex queries (auto, ast-only, script-only, disabled).</description>
+    <key name="enable-ai-filtering" type="b">
+      <default>true</default>
+      <summary>Enable AI Filtering</summary>
+      <description>Determines if the LLM should generate Rhai scripts to dynamically filter search results.</description>
     </key>
   </schema>
 </schemalist>

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Gnome Lens
+Comment=Local AI Semantic Search Engine
+Exec=gnome-lens-daemon
+Icon=org.gnome.Lens
+Terminal=false
+Categories=GNOME;GTK;Utility;Core;
+StartupNotify=true
+X-Flatpak=org.gnome.Lens

@@ -17,35 +17,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::env;
 use std::thread;
 use std::time::Instant;
-use std::process::Command;
 
 use crate::vector::VectorStore;
 use crate::ingestion::IngestionPipeline;
 use crate::plugins::{MathPlugin, EmailPlugin, AppLauncherPlugin, VectorSearchPlugin, PluginTool};
-use crate::engine::{SystemRouter, ThreadPool};
+use crate::engine::{SystemRouter, ThreadPool, RuntimeAdapter};
 use crate::triggers::{INotifyTrigger, IndexTrigger, GmailSyncDaemon};
 
-/// Helper to configure the gsettings command securely, 
-/// injecting the local schema path if running in development mode.
-fn build_gsettings_cmd() -> Command {
-    let mut cmd = Command::new("gsettings");
-    
-    // Inject schema dir for local development via ./run.sh
-    if Path::new("schemas").exists() {
-        cmd.env("GSETTINGS_SCHEMA_DIR", "schemas");
-    } else if let Ok(home) = env::var("HOME") {
-        // Fallback for user-local installations
-        let ext_schema = format!("{}/.local/share/gnome-shell/extensions/gnome-lens@cwittenberg/schemas", home);
-        if Path::new(&ext_schema).exists() {
-            cmd.env("GSETTINGS_SCHEMA_DIR", ext_schema);
-        }
-    }
-    
-    cmd
-}
-
-fn get_gsettings_bool(key: &str) -> bool {
-    if let Ok(output) = build_gsettings_cmd()
+fn get_gsettings_bool(adapter: &RuntimeAdapter, key: &str) -> bool {
+    if let Ok(output) = adapter.build_gsettings_cmd()
         .arg("get")
         .arg("org.gnome.shell.extensions.gnome-lens")
         .arg(key)
@@ -59,8 +39,8 @@ fn get_gsettings_bool(key: &str) -> bool {
     false
 }
 
-fn get_gsettings_int(key: &str, default: usize) -> usize {
-    if let Ok(output) = build_gsettings_cmd()
+fn get_gsettings_int(adapter: &RuntimeAdapter, key: &str, default: usize) -> usize {
+    if let Ok(output) = adapter.build_gsettings_cmd()
         .arg("get")
         .arg("org.gnome.shell.extensions.gnome-lens")
         .arg(key)
@@ -80,8 +60,8 @@ fn get_gsettings_int(key: &str, default: usize) -> usize {
     default
 }
 
-fn get_gsettings_array(key: &str) -> Vec<String> {
-    if let Ok(output) = build_gsettings_cmd()
+fn get_gsettings_array(adapter: &RuntimeAdapter, key: &str) -> Vec<String> {
+    if let Ok(output) = adapter.build_gsettings_cmd()
         .arg("get")
         .arg("org.gnome.shell.extensions.gnome-lens")
         .arg(key)
@@ -165,28 +145,29 @@ fn handle_client(mut stream: UnixStream, router: Arc<SystemRouter>) {
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
+    let runtime_adapter = Arc::new(RuntimeAdapter::detect());
     let home_dir = env::var("HOME").expect("HOME environment variable must be set");
     
-    let config_dir = format!("{}/.config/gnome-lens", home_dir);
+    let config_dir = runtime_adapter.config_dir().to_string_lossy().to_string();
     if !Path::new(&config_dir).exists() {
         fs::create_dir_all(&config_dir).expect("Failed to create secure config directory");
     }
 
-    let data_dir = format!("{}/.local/share/gnome-lens", home_dir);
+    let data_dir = runtime_adapter.data_dir().to_string_lossy().to_string();
     if !Path::new(&data_dir).exists() {
         fs::create_dir_all(&data_dir).expect("Failed to create secure data directory");
     }
 
     let db_path = format!("{}/gnome-lens.db", data_dir);
 
-    let state_dir = format!("{}/.local/state/gnome-lens", home_dir);
+    let state_dir = runtime_adapter.state_dir().to_string_lossy().to_string();
     if !Path::new(&state_dir).exists() {
         fs::create_dir_all(&state_dir).expect("Failed to create secure state directory");
     }
     
     let socket_path = format!("{}/gnome_lens.sock", state_dir);
 
-    let max_depth = get_gsettings_int("index-max-depth", 3);
+    let max_depth = get_gsettings_int(&runtime_adapter, "index-max-depth", 3);
 
     if args.len() > 1 {
         let command = &args[1];
@@ -200,9 +181,9 @@ fn main() -> std::io::Result<()> {
             }
 
             if let Some(target_dir) = args.get(2) {
-                let blacklist = get_gsettings_array("index-blacklist");
+                let blacklist = get_gsettings_array(&runtime_adapter, "index-blacklist");
                 println!("Triggering manual recursive ingestion for: {}", target_dir);
-                let pipeline = IngestionPipeline::new(Arc::clone(&vector_store), &config_dir, blacklist);
+                let pipeline = IngestionPipeline::new(Arc::clone(&vector_store), &config_dir, blacklist, Arc::clone(&runtime_adapter));
                 pipeline.run_indexer(vec![target_dir.clone()], max_depth);
             } else {
                 eprintln!("Error: Please provide a directory path. Usage: gnome-lens {} /path/to/dir", command);
@@ -241,8 +222,8 @@ fn main() -> std::io::Result<()> {
 
     let vector_store = Arc::new(VectorStore::new(&db_path));
     
-    let is_full_system = get_gsettings_bool("index-full-system");
-    let blacklist = get_gsettings_array("index-blacklist");
+    let is_full_system = get_gsettings_bool(&runtime_adapter, "index-full-system");
+    let blacklist = get_gsettings_array(&runtime_adapter, "index-blacklist");
 
     let mut target_directories = Vec::new();
 
@@ -251,7 +232,7 @@ fn main() -> std::io::Result<()> {
         target_directories.push(home_dir.clone());
     } else {
         println!("[Boot] Custom Path Indexation Enabled.");
-        let mut user_paths = get_gsettings_array("index-paths");
+        let mut user_paths = get_gsettings_array(&runtime_adapter, "index-paths");
         
         if user_paths.is_empty() {
             println!("[Boot Warning] No user paths retrieved from gsettings. Defaulting to home directory (~).");
@@ -267,11 +248,8 @@ fn main() -> std::io::Result<()> {
         target_directories.push("/etc".to_string());
     }
 
-    // Force injection of the new mail directory into the watched targets so INotify tracks incoming files
     let mail_dir = format!("{}/mail", data_dir);
     
-    // Proactively create the mail directory before validation so it doesn't get 
-    // dropped from the target list on fresh installations.
     if !Path::new(&mail_dir).exists() {
         fs::create_dir_all(&mail_dir).expect("Failed to create secure mail directory");
     }
@@ -292,25 +270,18 @@ fn main() -> std::io::Result<()> {
     
     println!("[Boot DEBUG] Target directories after validation (passed to watcher): {:?}", target_directories);
 
-    let pipeline = Arc::new(IngestionPipeline::new(Arc::clone(&vector_store), &config_dir, blacklist));
+    let pipeline = Arc::new(IngestionPipeline::new(Arc::clone(&vector_store), &config_dir, blacklist, Arc::clone(&runtime_adapter)));
 
-    // Spin up the local Gmail Sync Replica daemon
     let gmail_daemon = GmailSyncDaemon::new(&config_dir, &data_dir);
     gmail_daemon.start();
 
-    // STARTUP RECONCILIATION
     let initial_pipeline = Arc::clone(&pipeline);
-    
-    // Re-included the mail directory in the startup sweep.
-    // This is crucial to ensure that emails synced while the daemon was offline
-    // or existing emails on fresh boots are indexed into the database.
     let startup_dirs = target_directories.clone();
     
     thread::spawn(move || {
         initial_pipeline.run_indexer(startup_dirs, max_depth);
     });
 
-    // MARK AND SWEEP GARBAGE COLLECTION
     let gc_store = Arc::clone(&vector_store);
     thread::spawn(move || {
         thread::sleep(std::time::Duration::from_secs(300));
@@ -325,12 +296,9 @@ fn main() -> std::io::Result<()> {
     println!("Loading Gnome Lens Triggers:");
     for trigger in &index_triggers {
         println!("    {}", trigger.name());
-        // INotify receives the FULL list of target_directories (including mail_dir) 
-        // to guarantee real-time indexing of all incoming network downloads.
         trigger.start(target_directories.clone(), max_depth, Arc::clone(&pipeline));
     }
 
-    // Pass the vector store ARC into the EmailPlugin so it can execute DB queries
     let plugins: Vec<Box<dyn PluginTool>> = vec![
         Box::new(MathPlugin),
         Box::new(EmailPlugin::new(Arc::clone(&vector_store))),
@@ -343,7 +311,7 @@ fn main() -> std::io::Result<()> {
         println!("    {} [{}]", plugin.name(), plugin.id());
     }
 
-    let router = Arc::new(SystemRouter::new(plugins, Arc::clone(&vector_store), &config_dir));
+    let router = Arc::new(SystemRouter::new(plugins, Arc::clone(&vector_store), &config_dir, Arc::clone(&runtime_adapter)));
 
     if Path::new(&socket_path).exists() {
         fs::remove_file(&socket_path)?;

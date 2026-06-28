@@ -14,10 +14,25 @@ export const GnomeLensIndicator = GObject.registerClass(
             this._extension = extension;
             this._settings = settings;
 
-            let icon = new St.Icon({
-                icon_name: 'system-search-symbolic',
-                style_class: 'system-status-icon',
-            });
+            // Resolve the path to logo.svg within the extension directory bundle
+            let logoFile = this._extension.dir.get_child('logo.svg');
+            let icon;
+
+            if (logoFile.query_exists(null)) {
+                let fileIcon = new Gio.FileIcon({ file: logoFile });
+                icon = new St.Icon({
+                    gicon: fileIcon,
+                    style_class: 'system-status-icon',
+                    icon_size: 16
+                });
+            } else {
+                // Fallback icon in case the SVG asset fails to resolve
+                icon = new St.Icon({
+                    icon_name: 'system-search-symbolic',
+                    style_class: 'system-status-icon'
+                });
+            }
+            
             this.add_child(icon);
 
             this._buildMenu();

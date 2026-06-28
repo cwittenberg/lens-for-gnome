@@ -1,8 +1,27 @@
+// gnome-extension/prefs_about.js
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
 
-export function buildAboutPage() {
+function createLinkButton(title, uri, styleClass = null) {
+    const button = new Gtk.Button({
+        label: title,
+        valign: Gtk.Align.CENTER,
+        hexpand: true
+    });
+    
+    if (styleClass) {
+        button.add_css_class(styleClass);
+    }
+    
+    button.connect('clicked', () => {
+        Gio.AppInfo.launch_default_for_uri(uri, null);
+    });
+    
+    return button;
+}
+
+export function buildAboutPage(prefs) {
     const page = new Adw.PreferencesPage({ 
         title: 'About', 
         icon_name: 'help-about-symbolic' 
@@ -16,24 +35,40 @@ export function buildAboutPage() {
     });
     group.add(titleRow);
 
-    const githubRow = new Adw.ActionRow({
-        title: 'Source Code',
-        subtitle: 'View, report issues, and contribute on GitHub',
-        activatable: true
+    const linkBox = new Gtk.Box({
+        orientation: Gtk.Orientation.HORIZONTAL,
+        spacing: 12,
+        homogeneous: true,
+        halign: Gtk.Align.CENTER,
+        margin_top: 16,
+        margin_bottom: 16
     });
     
-    const githubIcon = new Gtk.Image({ 
-        icon_name: 'go-next-symbolic', 
-        valign: Gtk.Align.CENTER 
-    });
+    linkBox.append(createLinkButton('Buy me a coffee \u2615', 'https://ko-fi.com/cwittenberg', 'suggested-action'));
+    linkBox.append(createLinkButton('Report a Bug \uD83D\uDC1E', 'https://github.com/cwittenberg/gnome-lens/issues/new?template=bug_report.md'));
+    linkBox.append(createLinkButton('Request a Feature \uD83D\uDCA1', 'https://github.com/cwittenberg/gnome-lens/issues/new?template=feature_request.md'));
     
-    githubRow.add_suffix(githubIcon);
-    githubRow.connect('activated', () => {
-        let uri = 'https://github.com/cwittenberg/gnome-lens';
-        Gio.AppInfo.launch_default_for_uri(uri, null);
-    });
+    group.add(linkBox);
 
-    group.add(githubRow);
+    group.add(new Adw.ActionRow({ 
+        title: 'Developer', 
+        subtitle: 'Christian Wittenberg', 
+        title_lines: 0, 
+        subtitle_lines: 0 
+    }));
+    
+    let versionStr = 'Local / EGO (Auto-injected)';
+    if (prefs && prefs.metadata && prefs.metadata.version !== undefined) {
+        versionStr = prefs.metadata.version.toString();
+    }
+    
+    group.add(new Adw.ActionRow({ 
+        title: 'Version', 
+        subtitle: versionStr, 
+        title_lines: 0, 
+        subtitle_lines: 0 
+    }));
+
     page.add(group);
 
     return page;

@@ -68,6 +68,10 @@ if [ -f stylesheet.css ]; then
     cp stylesheet.css "$BUILD_DIR/"
 fi
 
+if [ -f logo.svg ]; then
+    cp logo.svg "$BUILD_DIR/"
+fi
+
 if [ -d "themes" ]; then
     echo "Discovered themes directory. Capturing custom themes:"
     find themes -type f -name '*.css' -print
@@ -116,6 +120,10 @@ if command -v gnome-extensions &> /dev/null; then
 
     if [ -f "$BUILD_DIR/trayicon.svg" ]; then
         PACK_ARGS+=("--extra-source=trayicon.svg")
+    fi
+
+    if [ -f "$BUILD_DIR/logo.svg" ]; then
+        PACK_ARGS+=("--extra-source=logo.svg")
     fi
 
     if [ -f "$BUILD_DIR/stylesheet.css" ]; then
@@ -203,6 +211,10 @@ cp -r "$BUILD_DIR/schemas" "$EXTENSION_DIR/"
 
 if [ -f "$BUILD_DIR/stylesheet.css" ]; then
     cp "$BUILD_DIR/stylesheet.css" "$EXTENSION_DIR/"
+fi
+
+if [ -f "$BUILD_DIR/logo.svg" ]; then
+    cp "$BUILD_DIR/logo.svg" "$EXTENSION_DIR/"
 fi
 
 if [ -d "$BUILD_DIR/themes" ]; then

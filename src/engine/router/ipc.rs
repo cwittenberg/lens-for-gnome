@@ -7,12 +7,14 @@ use crate::engine::vision::VisionEngine;
 use crate::engine::HardwareManager;
 use crate::engine::model_manager::ModelManager;
 use crate::vector::VectorStore;
+use crate::engine::RuntimeAdapter;
 
 pub fn handle_ipc_action<F>(
     json: &serde_json::Value,
     llm: &Arc<LlmService>,
     vision: &Arc<VisionEngine>,
     store: &Arc<VectorStore>,
+    runtime_adapter: &Arc<RuntimeAdapter>,
     is_cancelled: Arc<AtomicBool>,
     req_start: Instant,
     send_chunk: &mut F
@@ -254,7 +256,7 @@ where
                 
                 println!("[IPC Chain] Stage 1: Backend attempting direct execution of '{}'", cmd);
                 
-                let spawn_res = std::process::Command::new(cmd)
+                let spawn_res = runtime_adapter.create_system_command(cmd)
                     .args(&args)
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
@@ -299,7 +301,7 @@ where
         if let Some(path) = json["path"].as_str() {
             println!("[IPC Chain] Stage 1: Backend attempting to open file natively (gio/xdg-open): {}", path);
             
-            let status_res = std::process::Command::new("gio")
+            let status_res = runtime_adapter.create_system_command("gio")
                 .arg("open")
                 .arg(path)
                 .stdin(std::process::Stdio::null())
@@ -307,7 +309,7 @@ where
                 .stderr(std::process::Stdio::null())
                 .status()
                 .or_else(|_| {
-                    std::process::Command::new("xdg-open")
+                    runtime_adapter.create_system_command("xdg-open")
                         .arg(path)
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
@@ -346,7 +348,7 @@ where
             if let Some(parent) = path.parent() {
                 println!("[IPC Chain] Stage 1: Backend attempting to open folder natively: {:?}", parent);
                 
-                let status_res = std::process::Command::new("gio")
+                let status_res = runtime_adapter.create_system_command("gio")
                     .arg("open")
                     .arg(parent)
                     .stdin(std::process::Stdio::null())
@@ -354,7 +356,7 @@ where
                     .stderr(std::process::Stdio::null())
                     .status()
                     .or_else(|_| {
-                        std::process::Command::new("xdg-open")
+                        runtime_adapter.create_system_command("xdg-open")
                             .arg(parent)
                             .stdin(std::process::Stdio::null())
                             .stdout(std::process::Stdio::null())

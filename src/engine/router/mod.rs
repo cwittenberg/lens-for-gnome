@@ -1,5 +1,5 @@
 // src/engine/router/mod.rs
-mod ast;
+
 mod script;
 mod ipc;
 
@@ -13,13 +13,12 @@ use crate::plugins::PluginTool;
 use crate::vector::VectorStore;
 use crate::engine::llm::{LlmService, LlmIntent};
 use crate::engine::vision::VisionEngine;
+use crate::engine::RuntimeAdapter;
 
-// Interpreter Utility: Resolves Leap Years
 fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
-// Interpreter Utility: Converts explicit YYYY-MM-DD into UNIX epochs natively
 fn parse_date_to_timestamp(date_str: &str) -> Option<u64> {
     let parts: Vec<&str> = date_str.split('-').collect();
     if parts.len() == 3 {
@@ -49,19 +48,22 @@ pub struct SystemRouter {
     store: Arc<VectorStore>,
     domain_keywords: HashMap<String, Vec<String>>,
     vision: Arc<VisionEngine>,
+    runtime_adapter: Arc<RuntimeAdapter>,
 }
 
 impl SystemRouter {
-    pub fn new(plugins: Vec<Box<dyn PluginTool>>, store: Arc<VectorStore>, config_dir: &str) -> Self {
+    pub fn new(plugins: Vec<Box<dyn PluginTool>>, store: Arc<VectorStore>, config_dir: &str, runtime_adapter: Arc<RuntimeAdapter>) -> Self {
         let config_path = format!("{}/domains.json", config_dir);
         let domain_keywords = Self::load_config(&config_path);
-
+        let vision = Arc::new(VisionEngine::new(Arc::clone(&runtime_adapter)));
+        
         Self { 
             plugins,
             llm: Arc::new(LlmService::new()),
             store,
             domain_keywords,
-            vision: Arc::new(VisionEngine::new()),
+            vision,
+            runtime_adapter,
         }
     }
 
@@ -82,12 +84,12 @@ impl SystemRouter {
         let parsed: Result<serde_json::Value, _> = serde_json::from_str(request_payload);
         
         if let Ok(ref json) = parsed {
-            // PHASE 0: Intercept Configuration Generic Requests
             if ipc::handle_ipc_action(
                 json,
                 &self.llm,
                 &self.vision,
-                &self.store, 
+                &self.store,
+                &self.runtime_adapter,
                 Arc::clone(&is_cancelled),
                 req_start,
                 &mut send_chunk
@@ -104,9 +106,9 @@ impl SystemRouter {
             }
         };
 
-        let filter_strategy = match parsed {
-            Ok(ref json) => json["filter_strategy"].as_str().map(|s| s.to_string()),
-            Err(_) => None,
+        let enable_ai_filtering = match parsed {
+            Ok(ref json) => json["enable_ai_filtering"].as_bool().unwrap_or(true),
+            Err(_) => true,
         };
 
         let prioritize_folders = match parsed {
@@ -126,23 +128,18 @@ impl SystemRouter {
             max_timestamp: None,
             metadata_filters: HashMap::new(),
             directory_filter: None,
-            filter_strategy,
+            enable_ai_filtering,
             prioritize_folders,
         };
 
         if search_query.is_synthesis_request {
             search_query.raw_text = search_query.raw_text[1..].trim().to_string();
         }
-
-        // =====================================================================
-        // THE INTERPRETER PATTERN: Extract Explicit System Rules deterministically 
-        // =====================================================================
         
         let mut current_query = search_query.raw_text.clone();
         let lower_query = current_query.to_lowercase();
         let home_dir = std::env::var("HOME").unwrap_or_default();
         
-        // 1. Find and extract dir: or path: explicitly with robust quoting and fallback space validation
         let dir_markers = ["dir:", "path:"];
         let mut found_dir = false;
         
@@ -171,7 +168,6 @@ impl SystemRouter {
                         chars_to_consume = rest_orig.len();
                     }
                 } else {
-                    // Unquoted path. We must determine where the path ends and the trailing search keywords begin.
                     let next_marker_pos = rest_orig.to_lowercase().find(" ext:")
                         .or_else(|| rest_orig.to_lowercase().find(" type:"))
                         .or_else(|| rest_orig.to_lowercase().find(" after:"))
@@ -183,7 +179,6 @@ impl SystemRouter {
                     let mut candidate = raw_unquoted.to_string();
                     let mut found_valid_dir = false;
                     
-                    // Walk backwards space-by-space to verify if a path physically exists to resolve ambiguity
                     while !candidate.is_empty() {
                         let expanded_cand = candidate.replace("~", &home_dir);
                         if std::path::Path::new(&expanded_cand).is_dir() {
@@ -221,7 +216,6 @@ impl SystemRouter {
             }
         }
         
-        // 2. IMPLICIT BARE PATH DETECTION: If the user typed an absolute path directly without "dir:"
         if !found_dir {
             if let Some(start) = current_query.find(" /").map(|i| i + 1)
                 .or_else(|| current_query.find(" ~/").map(|i| i + 1))
@@ -283,9 +277,6 @@ impl SystemRouter {
         
         search_query.raw_text = clean_text_parts.join(" ");
 
-        // =====================================================================
-        // PHASE 0.5: DIRECT DIRECTORY BROWSING INTERCEPT
-        // =====================================================================
         if search_query.raw_text.is_empty() 
             && search_query.metadata_filters.is_empty() 
             && search_query.min_timestamp.is_none() 
@@ -316,7 +307,6 @@ impl SystemRouter {
             }
         }
 
-        // Alias "folder" queries directly to the "directory" database metadata tag
         if search_query.raw_text.to_lowercase().contains("folder") {
             search_query.metadata_filters.insert("filetype".to_string(), "directory".to_string());
         }
@@ -329,18 +319,13 @@ impl SystemRouter {
             }
         }
 
-        // =====================================================================
-        // PHASE 1: EXECUTE FAST PASS FIRST (Instant UI Feedback)
-        // =====================================================================
         let fp_start = Instant::now();
         let mut fast_results = Vec::new();
-
         for plugin in &self.plugins {
             if plugin.can_fast_handle(&search_query) {
                 fast_results.extend(plugin.execute(&search_query));
             }
         }
-
         println!("[Router DEBUG] Plugins & Vector Search took: {:.2?} (Found {} results)", fp_start.elapsed(), fast_results.len());
 
         let partial_payload: Vec<_> = fast_results.iter().map(|r| {
@@ -355,78 +340,24 @@ impl SystemRouter {
             "results": partial_payload
         }).to_string());
 
-        // =====================================================================
-        // PHASE 2: ZERO-SHOT INTENT ROUTING (Background LLM execution)
-        // =====================================================================
         let intent_start = Instant::now();
         
-        let intent = match search_query.filter_strategy.as_deref() {
-            Some("script-only") => LlmIntent::FilterScript,
-            Some("ast-only") => LlmIntent::FilterAst,
-            Some("disabled") if search_query.is_synthesis_request => LlmIntent::SynthesizeAnswer,
-            Some("disabled") => LlmIntent::Skip,
-            _ => self.llm.determine_intent(&search_query.raw_text, search_query.is_synthesis_request, search_query.filter_strategy.clone(), Arc::clone(&is_cancelled))
-        };
+        let intent = self.llm.determine_intent(
+            &search_query.raw_text, 
+            search_query.is_synthesis_request, 
+            search_query.enable_ai_filtering, 
+            Arc::clone(&is_cancelled)
+        );
         
         println!("[Router DEBUG] LLM intent determination took: {:.2?}", intent_start.elapsed());
-
         let phase_start = Instant::now();
+
         match intent {
             LlmIntent::Skip => {
                 send_chunk(serde_json::json!({"status": "done"}).to_string());
                 println!("[Router DEBUG] Skip Intent finished in {:.2?} (Returned 0 LLM results)", phase_start.elapsed());
             },
             
-            LlmIntent::FilterAst => {
-                send_chunk(serde_json::json!({"status": "filtering", "message": "Compiling logic..."}).to_string());
-                
-                let schema_keys = self.store.get_available_metadata_keys();
-                let generated_ast = self.llm.compile_query_to_ast(&search_query.raw_text, schema_keys, Arc::clone(&is_cancelled));
-                
-                let math_str = ast::ast_to_math_string(&generated_ast);
-                let display_str = if math_str.is_empty() { generated_ast.to_string() } else { math_str };
-                send_chunk(serde_json::json!({
-                    "status": "filtering", 
-                    "message": format!("Executing Filter: {}", display_str)
-                }).to_string());
-                
-                let mut ast_results = fast_results.clone();
-                let survivors = ast::execute_ast(&generated_ast, fast_results, &self.llm, Arc::clone(&is_cancelled));
-                
-                let mut survivor_map = HashMap::new();
-                for s in survivors {
-                    survivor_map.insert(s.id.clone(), s);
-                }
-                
-                for doc in &mut ast_results {
-                    if let Some(survivor) = survivor_map.get(&doc.id) {
-                        doc.ai_matched = Some(true);
-                        doc.ai_reasoning = survivor.ai_reasoning.clone();
-                    } else {
-                        doc.ai_matched = Some(false);
-                        doc.ai_reasoning = Some("Excluded by execution graph".to_string());
-                    }
-                }
-                
-                ast_results.sort_by(|a, b| {
-                    let a_match = a.ai_matched.unwrap_or(false);
-                    let b_match = b.ai_matched.unwrap_or(false);
-                    b_match.cmp(&a_match) 
-                });
-
-                let final_payload: Vec<_> = ast_results.into_iter().map(|mut r| {
-                    r.full_context = None;
-                    r
-                }).collect();
-
-                send_chunk(serde_json::json!({
-                    "status": "final",
-                    "mode": "llm_filtered",
-                    "results": final_payload
-                }).to_string());
-                println!("[Router DEBUG] FilterAst Intent finished in {:.2?} (Returned {} results)", phase_start.elapsed(), final_payload.len());
-            },
-
             LlmIntent::FilterScript => {
                 send_chunk(serde_json::json!({"status": "filtering", "message": "Reasoning..."}).to_string());
                 
@@ -528,6 +459,7 @@ impl SystemRouter {
                 send_chunk(serde_json::json!({"status": "processing", "message": "Applying semantic boundaries..."}).to_string());
                 
                 self.llm.apply_temporal_heuristics(&mut search_query, Arc::clone(&is_cancelled));
+
                 let mut llm_results = Vec::new();
                 if let Some(vector_plugin) = self.plugins.iter().find(|p| p.id() == "plugin:vector_db") {
                     llm_results = vector_plugin.execute(&search_query);

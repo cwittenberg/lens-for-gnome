@@ -20,6 +20,7 @@ use rayon::prelude::*;
 use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
 
 use crate::vector::VectorStore;
+use crate::engine::RuntimeAdapter;
 
 // Configurable global limit for text extraction per document
 const MAX_DOC_BYTES: usize = 256_000;
@@ -90,7 +91,7 @@ pub struct IngestionPipeline {
 }
 
 impl IngestionPipeline {
-    pub fn new(store: Arc<VectorStore>, config_dir: &str, blacklist: Vec<String>) -> Self {
+    pub fn new(store: Arc<VectorStore>, config_dir: &str, blacklist: Vec<String>, runtime_adapter: Arc<RuntimeAdapter>) -> Self {
         let mut options = InitOptions::default();
         options.model_name = EmbeddingModel::ParaphraseMLMiniLML12V2;
         options.show_download_progress = true;
@@ -108,11 +109,11 @@ impl IngestionPipeline {
             extractors: vec![
                 Box::new(plaintext::TxtExtractor),
                 Box::new(csv_file::CsvExtractor),
-                Box::new(pdf::PdfExtractor::new(MAX_DOC_BYTES)), 
+                Box::new(pdf::PdfExtractor::new(MAX_DOC_BYTES, Arc::clone(&runtime_adapter))), 
                 Box::new(office::ModernOfficeExtractor),
                 Box::new(spreadsheet::SpreadsheetExtractor),
                 Box::new(legacy::LegacyDocExtractor),
-                Box::new(image::ImageExtractor::new()),
+                Box::new(image::ImageExtractor::new(Arc::clone(&runtime_adapter))),
                 Box::new(video::VideoExtractor::new()),
                 Box::new(eml::EmlExtractor),
             ],

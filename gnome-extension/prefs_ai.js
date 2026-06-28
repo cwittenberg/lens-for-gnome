@@ -64,11 +64,10 @@ class AIEngineManager {
         this.progressBox.append(this.progressBar);
         this.progressBox.append(this.cancelButton);
         this.opGroup.add(this.progressBox);
-
         this.page.add(this.opGroup);
 
         // Model Selection Group
-        this.modelGroup = new Adw.PreferencesGroup({  
+        this.modelGroup = new Adw.PreferencesGroup({ 
              title: 'Available AI Models', 
              description: 'Fetching configurations...' 
          });
@@ -159,7 +158,6 @@ class AIEngineManager {
             c.cancel();
         }
         this._cancellables = [];
-
         this.spinner.stop();
         this.spinner.set_visible(false);
         this.progressBox.set_visible(false);
@@ -272,9 +270,17 @@ class AIEngineManager {
 
     _renderModels(configData) {
         let activeModelId = configData.active_model;
-        let models = configData.models;
+        let models = configData.models || {};
         
-        this.modelGroup.set_description('Select the local AI model to power Gnome Lens. Larger models provide better reasoning but require more system RAM.');
+        // Strip out unsupported Microsoft models from the backend list if they accidentally arrive
+        for (let key in models) {
+            let name = (models[key].name || '').toLowerCase();
+            if (name.includes('microsoft') || key.includes('phi') || key.includes('microsoft')) {
+                delete models[key];
+            }
+        }
+
+        this.modelGroup.set_description('Select the local AI model to power Gnome Lens. Larger models provide better reasoning but require more system RAM. (Note: Microsoft Phi models are completely unsupported due to execution instability.)');
         
         for (let r of this.modelRows) {
             this.modelGroup.remove(r);
@@ -282,7 +288,6 @@ class AIEngineManager {
         
         this.modelRows = [];
         this.switchButtons = [];
-
         for (let [id, info] of Object.entries(models)) {
             let isInstalled = info.is_installed === true;
             let installedLabel = isInstalled ? ' (Installed)' : '';
@@ -351,34 +356,13 @@ export function buildAIPage(settings, window) {
 
     const behaviorGroup = new Adw.PreferencesGroup({ title: 'Engine Behavior' });
     
-    const strategyModel = Gtk.StringList.new([
-        'Auto (Recommended)', 
-        'Prefer Mathematical AST', 
-        'Prefer Rhai Scripting', 
-        'Disable AI Filtering'
-    ]);
-    
-    const strategyRow = new Adw.ComboRow({
-        title: 'Data Filtering Strategy',
-        subtitle: 'Determines how the AI converts your natural language into database queries.',
-        model: strategyModel
+    const aiFilteringRow = new Adw.SwitchRow({
+        title: 'Enable AI based filtering',
+        subtitle: 'Uses Rhai script generation to intelligently filter data.',
     });
+    settings.bind('enable-ai-filtering', aiFilteringRow, 'active', Gio.SettingsBindFlags.DEFAULT);
     
-    let currentStrat = settings.get_string('ai-filter-strategy');
-    if (currentStrat === 'ast-only') strategyRow.selected = 1;
-    else if (currentStrat === 'script-only') strategyRow.selected = 2;
-    else if (currentStrat === 'disabled') strategyRow.selected = 3;
-    else strategyRow.selected = 0;
-
-    strategyRow.connect('notify::selected', () => {
-        let s = strategyRow.selected;
-        if (s === 1) settings.set_string('ai-filter-strategy', 'ast-only');
-        else if (s === 2) settings.set_string('ai-filter-strategy', 'script-only');
-        else if (s === 3) settings.set_string('ai-filter-strategy', 'disabled');
-        else settings.set_string('ai-filter-strategy', 'auto');
-    });
-    
-    behaviorGroup.add(strategyRow);
+    behaviorGroup.add(aiFilteringRow);
     page.add(behaviorGroup);
 
     let aiManager = new AIEngineManager(page);

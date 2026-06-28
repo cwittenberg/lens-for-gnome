@@ -9,18 +9,17 @@ pub enum LlmIntent {
     Skip,
     RefineSearch,
     SynthesizeAnswer,
-    FilterAst,
     FilterScript,
 }
 
 pub struct IntentStrategy;
 
 impl LlmStrategy for IntentStrategy {
-    type Input = (String, Option<String>);
+    type Input = (String, bool);
     type Output = LlmIntent;
 
     fn execute(&self, core: &LlmCore, input: Self::Input, is_cancelled: Arc<AtomicBool>) -> Self::Output {
-        let (query, filter_strategy) = input;
+        let (query, enable_ai_filtering) = input;
         
         let lower = query.to_lowercase();
         let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).collect();
@@ -59,9 +58,7 @@ impl LlmStrategy for IntentStrategy {
         
         if query.contains('"') || query.contains('\'') { has_trigger = true; }
 
-        let strat = filter_strategy.unwrap_or_else(|| "auto".to_string());
-        
-        if strat == "disabled" {
+        if !enable_ai_filtering {
             if synthesis_triggers.iter().any(|&w| words.contains(&w)) {
             } else if time_triggers.iter().any(|&w| words.contains(&w)) {
             } else {
@@ -102,24 +99,8 @@ impl LlmStrategy for IntentStrategy {
         else if response.contains('3') { intent = LlmIntent::FilterScript; } 
         else if response.contains('2') { intent = LlmIntent::RefineSearch; }
 
-        match strat.as_str() {
-            "auto" => {
-                if intent == LlmIntent::FilterAst { 
-                    intent = LlmIntent::FilterScript; 
-                }
-            },
-            "ast-only" => {
-                if intent == LlmIntent::FilterScript { intent = LlmIntent::FilterAst; }
-            },
-            "script-only" => {
-                if intent == LlmIntent::FilterAst { intent = LlmIntent::FilterScript; }
-            },
-            "disabled" => {
-                if intent == LlmIntent::FilterAst || intent == LlmIntent::FilterScript {
-                    intent = LlmIntent::Skip;
-                }
-            },
-            _ => {}
+        if !enable_ai_filtering && intent == LlmIntent::FilterScript {
+            intent = LlmIntent::Skip;
         }
 
         intent

@@ -1,7 +1,10 @@
+// src/ingestion/pdf.rs
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use crate::engine::vision::VisionEngine;
+use crate::engine::RuntimeAdapter;
 use super::FileExtractor;
 
 static PDF_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -12,9 +15,9 @@ pub struct PdfExtractor {
 }
 
 impl PdfExtractor {
-    pub fn new(max_extraction_bytes: usize) -> Self {
+    pub fn new(max_extraction_bytes: usize, runtime_adapter: Arc<RuntimeAdapter>) -> Self {
         Self {
-            vision: VisionEngine::new(),
+            vision: VisionEngine::new(runtime_adapter),
             max_extraction_bytes,
         }
     }

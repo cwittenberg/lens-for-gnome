@@ -4,15 +4,13 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/home/christian/Development/lens/target/release/gnome-lens
+ExecStart=/usr/bin/flatpak run org.gnome.Lens
 Restart=on-failure
 RestartSec=5
 Nice=10
 IOSchedulingClass=idle
 StandardOutput=append:%h/.local/state/gnome-lens/daemon.log
 StandardError=append:%h/.local/state/gnome-lens/daemon.log
-
-WantedBy=default.target
 
 [Install]
 WantedBy=default.target

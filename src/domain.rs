@@ -1,4 +1,5 @@
 // src/domain.rs
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -27,6 +28,6 @@ pub struct SearchQuery {
     pub max_timestamp: Option<u64>,
     pub metadata_filters: HashMap<String, String>,
     pub directory_filter: Option<String>,
-    pub filter_strategy: Option<String>,
+    pub enable_ai_filtering: bool,
     pub prioritize_folders: bool,
 }

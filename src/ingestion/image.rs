@@ -1,7 +1,9 @@
 // src/ingestion/image.rs
 use std::path::Path;
 use std::fs;
+use std::sync::Arc;
 use crate::engine::vision::VisionEngine;
+use crate::engine::RuntimeAdapter;
 use super::FileExtractor;
 
 // 0.5 MB limit to prevent excessive CPU utilization on high-res photos
@@ -12,9 +14,9 @@ pub struct ImageExtractor {
 }
 
 impl ImageExtractor {
-    pub fn new() -> Self {
+    pub fn new(runtime_adapter: Arc<RuntimeAdapter>) -> Self {
         Self {
-            vision: VisionEngine::new(),
+            vision: VisionEngine::new(runtime_adapter),
         }
     }
 }

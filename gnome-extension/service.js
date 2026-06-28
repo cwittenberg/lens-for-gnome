@@ -1,4 +1,3 @@
-// gnome-extension/service.js
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
@@ -13,6 +12,7 @@ export default class ServiceClient {
 
     sendPayload(payloadObj, callbacks) {
         this.cancel();
+        
         this._cancellable = new Gio.Cancellable();
         this._socketClient = new Gio.SocketClient();
         this.callbacks = callbacks || {};
@@ -35,7 +35,6 @@ export default class ServiceClient {
             this._inputStream.set_newline_type(Gio.DataStreamNewlineType.ANY);
 
             let payload = JSON.stringify(payloadObj) + '\n';
-
             this._outputStream.write_all_async(payload, GLib.PRIORITY_DEFAULT, this._cancellable, (stream, writeRes) => {
                 try {
                     stream.write_all_finish(writeRes);
@@ -48,10 +47,10 @@ export default class ServiceClient {
         });
     }
 
-    search(query, filterStrategy, prioritizeFolders, callbacks) {
+    search(query, enableAiFiltering, prioritizeFolders, callbacks) {
         this.sendPayload({ 
             query: query, 
-            filter_strategy: filterStrategy,
+            enable_ai_filtering: enableAiFiltering,
             prioritize_folders: prioritizeFolders
         }, callbacks);
     }
@@ -94,7 +93,6 @@ export default class ServiceClient {
                 this._outputStream.write_all(payload, null);
             } catch(e) {}
         }
-
         if (this._cancellable) {
             this._cancellable.cancel();
             this._cancellable = null;

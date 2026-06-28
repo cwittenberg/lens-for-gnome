@@ -1,26 +1,25 @@
 // src/engine/llm/mod.rs
+
 pub mod strategy_intent;
 pub mod strategy_temporal;
-pub mod strategy_filter;
-pub mod strategy_ast;
 pub mod strategy_synthesis;
 pub mod strategy_script;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::Write;
+
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
+
 use crate::domain::{SearchQuery, SearchResult};
 use crate::engine::model_manager::ModelManager;
 use crate::engine::HardwareManager;
 
 pub use strategy_intent::{LlmIntent, IntentStrategy};
 pub use strategy_temporal::TemporalStrategy;
-pub use strategy_filter::FastFilterStrategy;
-pub use strategy_ast::AstCompilerStrategy;
 pub use strategy_synthesis::SynthesisStrategy;
 pub use strategy_script::{ScriptCompilerStrategy, ScriptFixerStrategy, ScriptEvaluatorStrategy};
 
@@ -90,9 +89,6 @@ impl LlmCore {
         let safe_max = if adjusted_max_tokens > n_ctx_limit as usize { (n_ctx_limit / 2) as usize } else { adjusted_max_tokens };
         let max_prompt_len = (n_ctx_limit as usize).saturating_sub(safe_max).saturating_sub(10);
         
-        // FIX: Replaced destructive, logical-breaking slicing loop.
-        // Instead of destructive mid-prompt cutting that strips instructions/rules,
-        // we truncate explicitly from the tail if it exceeds capacity bounds to preserve format integrity.
         if tokens_list.len() > max_prompt_len {
             println!("[LLM Warning] Prompt length ({} tokens) exceeds limit. Truncating tail to fit context window safely.", tokens_list.len());
             tokens_list.truncate(max_prompt_len);
@@ -139,9 +135,6 @@ impl LlmCore {
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let absolute_max = (tokens_list.len() + adjusted_max_tokens).min(n_ctx_limit as usize);
 
-        // FIX: Inject deterministic sampling constraints during high-speed query routing actions.
-        // When checking for script compliance or doing rapid structural intent classifications,
-        // we forcefully evaluate maximum logit values without fuzzy sampling thresholds to bypass CoT cycles.
         while n_cur < absolute_max {
             if is_cancelled.load(Ordering::Relaxed) {
                 println!("\n[LLM] Request cancelled by client during generation.");
@@ -152,6 +145,7 @@ impl LlmCore {
             
             let mut best_token = self.model.token_eos();
             let mut max_logit = f32::NEG_INFINITY;
+
             for cand in candidates {
                 if cand.logit() > max_logit {
                     max_logit = cand.logit();
@@ -178,7 +172,7 @@ impl LlmCore {
                 || token_str.contains("<|im_end|>") 
                 || token_str.contains("<|im_start|>")
                 || token_str.contains("<|endoftext|>")
-                || token_str.contains("</s>") 
+                || token_str.contains("</s>")
             {
                 break;
             }
@@ -335,18 +329,12 @@ impl LlmService {
         Ok(())
     }
 
-    pub fn determine_intent(&self, query: &str, explicit_synthesis: bool, filter_strategy: Option<String>, is_cancelled: Arc<AtomicBool>) -> LlmIntent {
+    pub fn determine_intent(&self, query: &str, explicit_synthesis: bool, enable_ai_filtering: bool, is_cancelled: Arc<AtomicBool>) -> LlmIntent {
         if explicit_synthesis { return LlmIntent::SynthesizeAnswer; }
 
         let strategy = IntentStrategy;
         let core = self.engine.lock().unwrap();
-        strategy.execute(&core, (query.to_string(), filter_strategy), is_cancelled)
-    }
-
-    pub fn filter_with_llm(&self, condition: &str, candidates: Vec<SearchResult>, is_cancelled: Arc<AtomicBool>) -> Vec<SearchResult> {
-        let strategy = FastFilterStrategy;
-        let core = self.engine.lock().unwrap();
-        strategy.execute(&core, (condition.to_string(), candidates), is_cancelled)
+        strategy.execute(&core, (query.to_string(), enable_ai_filtering), is_cancelled)
     }
 
     pub fn generate_synthesis(&self, query: &str, core_concept: &str, context_docs: Vec<SearchResult>, is_cancelled: Arc<AtomicBool>) -> serde_json::Value {
@@ -355,12 +343,6 @@ impl LlmService {
         strategy.execute(&core, (query.to_string(), core_concept.to_string(), context_docs), is_cancelled)
     }
 
-    pub fn compile_query_to_ast(&self, query: &str, schema_keys: Vec<String>, is_cancelled: Arc<AtomicBool>) -> serde_json::Value {
-        let strategy = AstCompilerStrategy;
-        let core = self.engine.lock().unwrap();
-        strategy.execute(&core, (query.to_string(), schema_keys), is_cancelled)
-    }
-    
     pub fn compile_query_to_script(&self, query: &str, schema_keys: Vec<String>, is_cancelled: Arc<AtomicBool>) -> String {
         let strategy = ScriptCompilerStrategy;
         let core = self.engine.lock().unwrap();
@@ -401,7 +383,6 @@ impl LlmService {
             <|im_end|>\n\
             <|im_start|>assistant\n<think>\n</think>\n", query
         );
-
         let core = self.engine.lock().unwrap();
         let response = core.generate_text("KEYWORD_EXTRACTION", &prompt, 150, is_cancelled);
 

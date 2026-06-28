@@ -25,6 +25,18 @@
       "recommended": true,
       "description": "Best fast and still accurate default model for this machine. Noticeably faster than 7B/8B models while staying much smarter than tiny 1B/2B models."
     },
+    "nemotron-mini-4b-q4-k-m": {
+      "name": "NVIDIA Nemotron Mini 4B Instruct",
+      "filename": "Nemotron-Mini-4B-Instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/Nemotron-Mini-4B-Instruct-GGUF/resolve/main/Nemotron-Mini-4B-Instruct-Q4_K_M.gguf",
+      "size_gb": 2.6,
+      "ram_required_gb": 4.0,
+      "parameters": "4.0B",
+      "context_tokens": 4096,
+      "category": "fast-reasoning",
+      "recommended": true,
+      "description": "Fast, compact SLM optimized for RAG and function calling. Runs exceptionally well on Vulkan."
+    },
     "phi-4-mini-q4-k-m": {
       "name": "Phi 4 Mini",
       "filename": "phi-4-mini-instruct-q4_k_m.gguf",

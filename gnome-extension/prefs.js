@@ -18,6 +18,6 @@ export default class GnomeLensPreferences extends ExtensionPreferences {
         window.add(buildAIPage(settings, window));
         window.add(buildIndexPage(settings, window));
         window.add(buildMailPage(settings, window));
-        window.add(buildAboutPage());
+        window.add(buildAboutPage(this));
     }
 }
