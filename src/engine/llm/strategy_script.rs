@@ -25,6 +25,8 @@ impl LlmStrategy for ScriptCompilerStrategy {
             schema_keys.join(", ")
         };
 
+        let cot_bypass = if core.supports_cot { "<think>\n</think>\n" } else { "" };
+
         let prompt = format!(
             "<|im_start|>system\nYou are a high-speed query routing compiler. Map user queries to a single boolean Rhai (Rust) expression. You must output code immediately. <think> reasoning tags are strictly forbidden.<|im_end|>\n\
             <|im_start|>user\n\
@@ -59,12 +61,10 @@ impl LlmStrategy for ScriptCompilerStrategy {
             6. TRANSLATE LOGIC: NEVER use quantitative words like 'more', 'less', 'under', 'over' inside a literal regex pattern. You MUST extract the targeted number using `parse_float(regex_extract(...))` and then apply mathematical operators (>, <, >=, <=) inside the Rhai script.\n\
             \n\
             Query: \"{}\"<|im_end|>\n\
-            <|im_start|>assistant\n```rhai\n",
-            schema_str, query
+            <|im_start|>assistant\n{}```rhai\n",
+            schema_str, query, cot_bypass
         );
 
-        // We prefilled the prompt with ```rhai\n, trapping the LLM inside a code block.
-        // It skips the <think> reasoning entirely and instantly generates the code.
         let response = core.generate_text("SCRIPT_COMPILER", &prompt, 1024, is_cancelled);
         extract_prefilled_rhai(&response)
     }
@@ -85,6 +85,8 @@ impl LlmStrategy for ScriptFixerStrategy {
             schema_keys.join(", ")
         };
 
+        let cot_bypass = if core.supports_cot { "<think>\n</think>\n" } else { "" };
+
         let prompt = format!(
             "<|im_start|>system\nYou are a strict Rust/Rhai debugging expert. Fix the script based on the provided error or feedback. <think> tags are strictly forbidden.<|im_end|>\n\
             <|im_start|>user\n\
@@ -103,8 +105,8 @@ impl LlmStrategy for ScriptFixerStrategy {
             1. Fix the script directly based on the feedback. Do not change underlying logic if it is already sound.\n\
             2. The script must return a boolean value.\n\
             3. Output ONLY the fixed script.<|im_end|>\n\
-            <|im_start|>assistant\n```rhai\n",
-            query, schema_str, broken_script, error_msg
+            <|im_start|>assistant\n{}```rhai\n",
+            query, schema_str, broken_script, error_msg, cot_bypass
         );
 
         let response = core.generate_text("SCRIPT_FIXER", &prompt, 1024, is_cancelled);
@@ -145,6 +147,7 @@ impl LlmStrategy for ScriptEvaluatorStrategy {
             1. Does the script accurately reflect mathematical bounds (e.g., if the user asked for 'under 100', does the script use `< 100` and NOT `> 100`)?\n\
             2. Does the script query hallucinated metadata fields that are NOT in the available fields list? ('text' and 'title' are valid variables, NOT hallucinated fields).\n\
             3. Is the logic sound for achieving the user's explicit goal?\n\
+            4. IMPORTANT AGGREGATION RULE: The script acts as a PER-DOCUMENT boolean filter. If the user asks \"how many\" or \"count\", the script MUST return a boolean `true` if a document matches the criteria. The external system handles the counting. DO NOT reject a script for returning a boolean.\n\
             \n\
             IF THE SCRIPT IS PERFECT: Output exactly the word \"APPROVE\".\n\
             IF THE SCRIPT HAS LOGICAL FLAWS: Output \"DENY | \" followed by a brief 1-sentence instruction on how to fix the logic.\n\
