@@ -87,7 +87,7 @@ impl SystemRouter {
                 json,
                 &self.llm,
                 &self.vision,
-                &self.store, // Passed the vector store for maintenance IPC commands
+                &self.store, 
                 Arc::clone(&is_cancelled),
                 req_start,
                 &mut send_chunk
@@ -223,7 +223,6 @@ impl SystemRouter {
         
         // 2. IMPLICIT BARE PATH DETECTION: If the user typed an absolute path directly without "dir:"
         if !found_dir {
-            // Look for an absolute path starting with '/' or '~/'
             if let Some(start) = current_query.find(" /").map(|i| i + 1)
                 .or_else(|| current_query.find(" ~/").map(|i| i + 1))
                 .or_else(|| if current_query.starts_with('/') || current_query.starts_with("~/") { Some(0) } else { None })
@@ -336,7 +335,6 @@ impl SystemRouter {
         let fp_start = Instant::now();
         let mut fast_results = Vec::new();
 
-        // Run ALL applicable plugins and collect results to enable UI grouping
         for plugin in &self.plugins {
             if plugin.can_fast_handle(&search_query) {
                 fast_results.extend(plugin.execute(&search_query));
@@ -345,14 +343,12 @@ impl SystemRouter {
 
         println!("[Router DEBUG] Plugins & Vector Search took: {:.2?} (Found {} results)", fp_start.elapsed(), fast_results.len());
 
-        // Strip the payload context before piping to the socket to prevent IPC bloat
         let partial_payload: Vec<_> = fast_results.iter().map(|r| {
             let mut c = r.clone();
             c.full_context = None;
             c
         }).collect();
 
-        // Fire the fast pass results to the GNOME frontend instantly
         send_chunk(serde_json::json!({
             "status": "partial",
             "mode": "fast_pass",
@@ -364,7 +360,13 @@ impl SystemRouter {
         // =====================================================================
         let intent_start = Instant::now();
         
-        let intent = self.llm.determine_intent(&search_query.raw_text, search_query.is_synthesis_request, search_query.filter_strategy.clone(), Arc::clone(&is_cancelled));
+        let intent = match search_query.filter_strategy.as_deref() {
+            Some("script-only") => LlmIntent::FilterScript,
+            Some("ast-only") => LlmIntent::FilterAst,
+            Some("disabled") if search_query.is_synthesis_request => LlmIntent::SynthesizeAnswer,
+            Some("disabled") => LlmIntent::Skip,
+            _ => self.llm.determine_intent(&search_query.raw_text, search_query.is_synthesis_request, search_query.filter_strategy.clone(), Arc::clone(&is_cancelled))
+        };
         
         println!("[Router DEBUG] LLM intent determination took: {:.2?}", intent_start.elapsed());
 
@@ -378,13 +380,9 @@ impl SystemRouter {
             LlmIntent::FilterAst => {
                 send_chunk(serde_json::json!({"status": "filtering", "message": "Compiling Logic AST..."}).to_string());
                 
-                // 1. Fetch available schema keys natively from the Vector Engine
                 let schema_keys = self.store.get_available_metadata_keys();
-                
-                // 2. Translate Natural Language into strict LISP AST via LLM
                 let generated_ast = self.llm.compile_query_to_ast(&search_query.raw_text, schema_keys, Arc::clone(&is_cancelled));
                 
-                // Feedback loop: show the user the mathematical logic derived from their text
                 let math_str = ast::ast_to_math_string(&generated_ast);
                 let display_str = if math_str.is_empty() { generated_ast.to_string() } else { math_str };
                 send_chunk(serde_json::json!({
@@ -392,7 +390,6 @@ impl SystemRouter {
                     "message": format!("Executing Filter: {}", display_str)
                 }).to_string());
                 
-                // 3. Execute AST natively over the fast-pass candidates
                 let mut ast_results = fast_results.clone();
                 let survivors = ast::execute_ast(&generated_ast, fast_results, &self.llm, Arc::clone(&is_cancelled));
                 
@@ -411,7 +408,6 @@ impl SystemRouter {
                     }
                 }
                 
-                // Sort so that AI matches rank highest, followed by false or un-evaluated matches
                 ast_results.sort_by(|a, b| {
                     let a_match = a.ai_matched.unwrap_or(false);
                     let b_match = b.ai_matched.unwrap_or(false);
@@ -435,48 +431,97 @@ impl SystemRouter {
                 send_chunk(serde_json::json!({"status": "filtering", "message": "Compiling Logic Script..."}).to_string());
                 
                 let schema_keys = self.store.get_available_metadata_keys();
-                let generated_script = self.llm.compile_query_to_script(&search_query.raw_text, schema_keys, Arc::clone(&is_cancelled));
+                let mut generated_script = self.llm.compile_query_to_script(&search_query.raw_text, schema_keys.clone(), Arc::clone(&is_cancelled));
                 
-                send_chunk(serde_json::json!({
-                    "status": "filtering", 
-                    "message": format!("Executing Filter Script:\n{}", generated_script)
-                }).to_string());
+                let engine = script::build_rhai_engine();
+                let mut final_ast = None;
+                let mut attempt = 1;
                 
-                let mut ast_results = fast_results.clone();
-                let survivors = script::execute_script(&generated_script, fast_results, &self.llm, Arc::clone(&is_cancelled));
-                
-                let mut survivor_map = HashMap::new();
-                for s in survivors {
-                    survivor_map.insert(s.id.clone(), s);
-                }
-                
-                for doc in &mut ast_results {
-                    if let Some(survivor) = survivor_map.get(&doc.id) {
-                        doc.ai_matched = Some(true);
-                        doc.ai_reasoning = survivor.ai_reasoning.clone();
-                    } else {
-                        doc.ai_matched = Some(false);
-                        doc.ai_reasoning = Some("Excluded by execution script".to_string());
+                while attempt <= 3 {
+                    if is_cancelled.load(std::sync::atomic::Ordering::Relaxed) { break; }
+                    
+                    match engine.compile(&generated_script) {
+                        Ok(ast) => {
+                            send_chunk(serde_json::json!({"status": "filtering", "message": format!("Validating semantic logic (Attempt {})...", attempt)}).to_string());
+                            
+                            let eval_result = self.llm.evaluate_script_logic(&search_query.raw_text, &generated_script, schema_keys.clone(), Arc::clone(&is_cancelled));
+                            
+                            if eval_result == "APPROVE" {
+                                println!("[Router DEBUG] Script Logic Approved by Critic on attempt {}", attempt);
+                                final_ast = Some(ast);
+                                break;
+                            } else {
+                                println!("[Router DEBUG] Script logic rejected by Critic. Retrying with revised script...");
+                                generated_script = eval_result;
+                                attempt += 1;
+                            }
+                        },
+                        Err(e) => {
+                            send_chunk(serde_json::json!({"status": "filtering", "message": format!("Fixing compilation error (Attempt {})...", attempt)}).to_string());
+                            println!("[Router DEBUG] Script Compilation Failed: {}. Requesting fix...", e);
+                            
+                            generated_script = self.llm.fix_script_syntax(
+                                &search_query.raw_text, 
+                                &generated_script, 
+                                &e.to_string(), 
+                                schema_keys.clone(), 
+                                Arc::clone(&is_cancelled)
+                            );
+                            attempt += 1;
+                        }
                     }
                 }
                 
-                ast_results.sort_by(|a, b| {
-                    let a_match = a.ai_matched.unwrap_or(false);
-                    let b_match = b.ai_matched.unwrap_or(false);
-                    b_match.cmp(&a_match) 
-                });
+                if let Some(ast) = final_ast {
+                    send_chunk(serde_json::json!({
+                        "status": "filtering", 
+                        "message": format!("Executing Validated Script:\n{}", generated_script)
+                    }).to_string());
+                    
+                    let mut ast_results = fast_results.clone();
+                    let survivors = script::execute_script(&ast, fast_results, Arc::clone(&is_cancelled));
+                    
+                    let mut survivor_map = HashMap::new();
+                    for s in survivors {
+                        survivor_map.insert(s.id.clone(), s);
+                    }
+                    
+                    for doc in &mut ast_results {
+                        if let Some(survivor) = survivor_map.get(&doc.id) {
+                            doc.ai_matched = Some(true);
+                            doc.ai_reasoning = survivor.ai_reasoning.clone();
+                        } else {
+                            doc.ai_matched = Some(false);
+                            doc.ai_reasoning = Some("Excluded by validated execution script".to_string());
+                        }
+                    }
+                    
+                    ast_results.sort_by(|a, b| {
+                        let a_match = a.ai_matched.unwrap_or(false);
+                        let b_match = b.ai_matched.unwrap_or(false);
+                        b_match.cmp(&a_match) 
+                    });
 
-                let final_payload: Vec<_> = ast_results.into_iter().map(|mut r| {
-                    r.full_context = None;
-                    r
-                }).collect();
+                    let final_payload: Vec<_> = ast_results.into_iter().map(|mut r| {
+                        r.full_context = None;
+                        r
+                    }).collect();
 
-                send_chunk(serde_json::json!({
-                    "status": "final",
-                    "mode": "llm_filtered",
-                    "results": final_payload
-                }).to_string());
-                println!("[Router DEBUG] FilterScript Intent finished in {:.2?} (Returned {} results)", phase_start.elapsed(), final_payload.len());
+                    send_chunk(serde_json::json!({
+                        "status": "final",
+                        "mode": "llm_filtered",
+                        "results": final_payload
+                    }).to_string());
+                    
+                    println!("[Router DEBUG] Agentic FilterScript Intent finished in {:.2?} (Returned {} results)", phase_start.elapsed(), final_payload.len());
+                } else {
+                    println!("[Router DEBUG] Agentic Script Loop failed after 3 attempts. Dropping to semantic fast results.");
+                    send_chunk(serde_json::json!({
+                        "status": "final",
+                        "mode": "llm_filtered",
+                        "results": partial_payload
+                    }).to_string());
+                }
             },
 
             LlmIntent::RefineSearch => {
@@ -488,7 +533,6 @@ impl SystemRouter {
                     llm_results = vector_plugin.execute(&search_query);
                 }
                 
-                // Deduplicate results that were already in the fast pass
                 llm_results.retain(|res| !partial_payload.iter().any(|fast_res| fast_res.id == res.id));
 
                 let mut combined_results = fast_results;
@@ -514,17 +558,12 @@ impl SystemRouter {
                 
                 send_chunk(serde_json::json!({"status": "synthesizing", "message": "Reading local documents..."}).to_string());
                 
-                let mut refined_query = search_query.clone();
-                // Overwrite the raw text with the clean semantic keywords so vector search isolates the topic
-                refined_query.raw_text = core_concept.clone();
-                
                 let mut rag_docs = Vec::new();
                 if let Some(vector_plugin) = self.plugins.iter().find(|p| p.id() == "plugin:vector_db") {
-                    rag_docs = vector_plugin.execute(&refined_query);
+                    rag_docs = vector_plugin.execute(&search_query);
                 }
                 
-                // Pass the original question to the LLM so it can answer it properly using the clean RAG docs
-                let answer_json = self.llm.generate_synthesis(&search_query.raw_text, rag_docs.clone(), Arc::clone(&is_cancelled));
+                let answer_json = self.llm.generate_synthesis(&search_query.raw_text, &core_concept, rag_docs.clone(), Arc::clone(&is_cancelled));
                 
                 let cited_indices: Vec<usize> = answer_json["cited_indices"]
                     .as_array()
@@ -534,7 +573,6 @@ impl SystemRouter {
                 let mut final_payload = Vec::new();
                 
                 for idx in cited_indices {
-                    // LLM citations are 1-based (Source [1], Source [2])
                     if idx > 0 && idx <= rag_docs.len() {
                         let mut doc = rag_docs[idx - 1].clone();
                         doc.full_context = None;
@@ -548,7 +586,6 @@ impl SystemRouter {
                     "status": "final",
                     "mode": "rag_synthesis",
                     "synthesis_result": answer_json,
-                    // Replaces the bogus fast_results with only the strictly cited files
                     "results": final_payload
                 }).to_string());
                 println!("[Router DEBUG] SynthesizeAnswer Intent finished in {:.2?} (Returned {} results)", phase_start.elapsed(), final_payload.len());

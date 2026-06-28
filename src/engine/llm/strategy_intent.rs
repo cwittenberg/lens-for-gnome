@@ -1,4 +1,5 @@
 // src/engine/llm/strategy_intent.rs
+// FIX: Removed assistant prefill; increased token limits for reasoning headroom.
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use super::{LlmStrategy, LlmCore};
@@ -39,7 +40,6 @@ impl LlmStrategy for IntentStrategy {
             "menos", "mayor", "debajo", "encima"
         ];
 
-        // Expanded natural triggers so the user doesn't have to talk like a programmer
         let script_filter_triggers = [
             "regex", "pattern", "starts", "ends", "starting", "ending", "format", "wildcard", "match"
         ];
@@ -61,12 +61,9 @@ impl LlmStrategy for IntentStrategy {
 
         let strat = filter_strategy.unwrap_or_else(|| "auto".to_string());
         
-        // Fast-path disabling of heavy AI filters if explicitly requested by user settings
         if strat == "disabled" {
             if synthesis_triggers.iter().any(|&w| words.contains(&w)) {
-                // Synthesis questions are still allowed if requested
             } else if time_triggers.iter().any(|&w| words.contains(&w)) {
-                // Light temporal boundary checks are still allowed
             } else {
                 return LlmIntent::Skip;
             }
@@ -77,7 +74,7 @@ impl LlmStrategy for IntentStrategy {
         }
 
         let prompt = format!(
-            "<|im_start|>system\nYou are a strict routing API. Output ONLY a single digit.<|im_end|>\n\
+            "<|im_start|>system\nYou are a strict routing API. Output ONLY a single digit. Thinking, reasoning, or dialogue are strictly FORBIDDEN.<|im_end|>\n\
             <|im_start|>user\n\
             Classify the user's search intent into ONE digit:\n\
             1: SKIP (Standard keyword search)\n\
@@ -93,25 +90,20 @@ impl LlmStrategy for IntentStrategy {
             Query:\n\
             [{}]\n\
             <|im_end|>\n\
-            <|im_start|>assistant\n\
-            INTENT_DIGIT: ",
+            <|im_start|>assistant\n<think>\n</think>\n",
             query
         );
 
-        let response = core.generate_text("INTENT_STRATEGY", &prompt, 5, is_cancelled).trim().to_string();
-        let clean_response = response.replace("INTENT_DIGIT:", "");
+        let response = core.generate_text("INTENT_STRATEGY", &prompt, 150, is_cancelled);
         
         let mut intent = LlmIntent::Skip;
-        // Prioritize evaluating '4' first so that parsing issues don't drop synthesis to script or AST
-        if clean_response.contains('4') { intent = LlmIntent::SynthesizeAnswer; }
-        else if clean_response.contains('5') { intent = LlmIntent::FilterScript; }
-        else if clean_response.contains('3') { intent = LlmIntent::FilterScript; } // Preference override: Map AST classifications to FilterScript natively
-        else if clean_response.contains('2') { intent = LlmIntent::RefineSearch; }
+        if response.contains('4') { intent = LlmIntent::SynthesizeAnswer; }
+        else if response.contains('5') { intent = LlmIntent::FilterScript; }
+        else if response.contains('3') { intent = LlmIntent::FilterScript; } 
+        else if response.contains('2') { intent = LlmIntent::RefineSearch; }
 
-        // Override intents securely based on user strategy preference
         match strat.as_str() {
             "auto" => {
-                // Guarantee script generation is preferred over AST when auto is active
                 if intent == LlmIntent::FilterAst { 
                     intent = LlmIntent::FilterScript; 
                 }

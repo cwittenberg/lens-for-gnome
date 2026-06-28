@@ -264,9 +264,9 @@ export const GnomeLensUI = GObject.registerClass({
             isPreviewVideoActive: () => {
                 return this._preview && this._preview.isVisible() && this._preview.isVideo();
             },
-            onScrub: (offset) => {
+            onScrub: (offset, isPercentage = false) => {
                 if (this._preview && this._preview.isVisible() && typeof this._preview.scrub === 'function') {
-                    this._preview.scrub(offset);
+                    this._preview.scrub(offset, isPercentage);
                 }
             }
         });
@@ -318,9 +318,9 @@ export const GnomeLensUI = GObject.registerClass({
             isPreviewVideoActive: () => {
                 return this._preview && this._preview.isVisible() && this._preview.isVideo();
             },
-            onScrub: (offset) => {
+            onScrub: (offset, isPercentage = false) => {
                 if (this._preview && this._preview.isVisible() && typeof this._preview.scrub === 'function') {
-                    this._preview.scrub(offset);
+                    this._preview.scrub(offset, isPercentage);
                 }
             }
         });

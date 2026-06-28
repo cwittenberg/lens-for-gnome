@@ -80,8 +80,8 @@ impl LlmStrategy for FastFilterStrategy {
                 condition, docs_block
             );
 
-            // Lower token limit back down to prevent runaway generation, 200 is plenty for compressed tabular output
-            let response = core.generate_text("FAST_FILTER_STRATEGY", &prompt, 200, Arc::clone(&is_cancelled));
+            // Upgraded Token limits to ensure Reasoning models do not choke out on `<think>` generation buffers
+            let response = core.generate_text("FAST_FILTER_STRATEGY", &prompt, 1024, Arc::clone(&is_cancelled));
             
             // We prime the LLM with "1 | " to ensure it immediately starts formatting correctly, so we must prepend it back.
             let full_response = format!("1 | {}", response.trim());

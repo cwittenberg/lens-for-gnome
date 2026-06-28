@@ -38,16 +38,18 @@ class GnomeLensResultsList extends St.ScrollView {
 
     vfunc_key_press_event(keyEvent) {
         let symbol = keyEvent.get_key_symbol();
+        let state = keyEvent.get_state();
+        let isShift = (state & Clutter.ModifierType.SHIFT_MASK) !== 0;
         
         // INTERCEPT: If a video preview is active, pass arrow keys down instead of swallowing them
         if (symbol === Clutter.KEY_Right) {
             if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
-                if (this.callbacks.onScrub) this.callbacks.onScrub(5);
+                if (this.callbacks.onScrub) this.callbacks.onScrub(isShift ? 0.20 : 5, isShift);
                 return Clutter.EVENT_STOP;
             }
         } else if (symbol === Clutter.KEY_Left) {
             if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
-                if (this.callbacks.onScrub) this.callbacks.onScrub(-5);
+                if (this.callbacks.onScrub) this.callbacks.onScrub(isShift ? -0.20 : -5, isShift);
                 return Clutter.EVENT_STOP;
             }
         }
@@ -319,7 +321,11 @@ class GnomeLensResultsList extends St.ScrollView {
         let bestMatches = [];
         let rest = [];
 
-        if (activeFilter === 'All' && scoreSorted.length > 0) {
+        // Check if this is an AI-filtered response (where all returned items explicitly matched an AI criteria)
+        // If so, we don't need a "Top Hits" section; categorization by type is better.
+        let isAiFiltered = scoreSorted.length > 0 && scoreSorted.every(r => r.ai_matched === true);
+
+        if (activeFilter === 'All' && scoreSorted.length > 0 && !isAiFiltered) {
             let maxBest = Math.min(5, scoreSorted.length);
             bestMatches = scoreSorted.slice(0, maxBest);
             rest = scoreSorted.slice(maxBest);

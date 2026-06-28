@@ -69,7 +69,7 @@ export const GnomeLensPreview = GObject.registerClass({
                 }
 
                 if (delta !== 0) {
-                    this._activeStrategy.scrub(delta);
+                    this._activeStrategy.scrub(delta, false);
                     return Clutter.EVENT_STOP;
                 }
             }
@@ -221,9 +221,9 @@ export const GnomeLensPreview = GObject.registerClass({
 
     isVideo() { return this._type === 'video'; }
 
-    scrub(offset) {
+    scrub(offset, isPercentage = false) {
         if (this.isVideo() && this._activeStrategy && typeof this._activeStrategy.scrub === 'function') {
-            this._activeStrategy.scrub(offset);
+            this._activeStrategy.scrub(offset, isPercentage);
         }
     }
 

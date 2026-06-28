@@ -9,37 +9,26 @@ pub mod strategy_script;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::Write;
-
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
-
 use crate::domain::{SearchQuery, SearchResult};
 use crate::engine::model_manager::ModelManager;
 use crate::engine::HardwareManager;
 
-// Re-export strategies and types for the Router to consume
 pub use strategy_intent::{LlmIntent, IntentStrategy};
 pub use strategy_temporal::TemporalStrategy;
 pub use strategy_filter::FastFilterStrategy;
 pub use strategy_ast::AstCompilerStrategy;
 pub use strategy_synthesis::SynthesisStrategy;
-pub use strategy_script::ScriptCompilerStrategy;
-
-// =====================================================================
-// 1. STRATEGY INTERFACE
-// =====================================================================
+pub use strategy_script::{ScriptCompilerStrategy, ScriptFixerStrategy, ScriptEvaluatorStrategy};
 
 pub trait LlmStrategy {
     type Input;
     type Output;
     fn execute(&self, core: &LlmCore, input: Self::Input, is_cancelled: Arc<AtomicBool>) -> Self::Output;
 }
-
-// =====================================================================
-// 2. HARDWARE CORE (Inference Engine)
-// =====================================================================
 
 pub struct LlmCore {
     pub backend: LlamaBackend,
@@ -79,11 +68,10 @@ impl LlmCore {
         let n_ctx_limit: u32 = 4096;
         let n_batch_limit: u32 = 512;
         
-        let available_threads = std::thread::available_parallelism()
-            .map(|n| n.get() as i32)
+        let optimal_threads = std::thread::available_parallelism()
+            .map(|n| n.get().min(8) as i32)
             .unwrap_or(4);
-        let optimal_threads = available_threads.min(8);
-        
+
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(std::num::NonZeroU32::new(n_ctx_limit))
             .with_n_batch(n_batch_limit)
@@ -98,19 +86,16 @@ impl LlmCore {
         let mut tokens_list = self.model.str_to_token(prompt, llama_cpp_2::model::AddBos::Always)
             .unwrap_or_default();
 
-        let safe_max = if max_tokens > n_ctx_limit as usize { (n_ctx_limit / 2) as usize } else { max_tokens };
+        let adjusted_max_tokens = max_tokens + 1024;
+        let safe_max = if adjusted_max_tokens > n_ctx_limit as usize { (n_ctx_limit / 2) as usize } else { adjusted_max_tokens };
         let max_prompt_len = (n_ctx_limit as usize).saturating_sub(safe_max).saturating_sub(10);
         
+        // FIX: Replaced destructive, logical-breaking slicing loop.
+        // Instead of destructive mid-prompt cutting that strips instructions/rules,
+        // we truncate explicitly from the tail if it exceeds capacity bounds to preserve format integrity.
         if tokens_list.len() > max_prompt_len {
-            let excess = tokens_list.len() - max_prompt_len;
-            let start_drain = 500.min(tokens_list.len() / 2);
-            let end_drain = (start_drain + excess).min(tokens_list.len().saturating_sub(20));
-
-            if start_drain < end_drain {
-                tokens_list.drain(start_drain..end_drain);
-            } else {
-                tokens_list.truncate(max_prompt_len);
-            }
+            println!("[LLM Warning] Prompt length ({} tokens) exceeds limit. Truncating tail to fit context window safely.", tokens_list.len());
+            tokens_list.truncate(max_prompt_len);
         }
 
         if tokens_list.is_empty() { 
@@ -152,8 +137,11 @@ impl LlmCore {
 
         let mut output = String::new();
         let mut decoder = encoding_rs::UTF_8.new_decoder();
-        let absolute_max = (tokens_list.len() + max_tokens).min(n_ctx_limit as usize);
+        let absolute_max = (tokens_list.len() + adjusted_max_tokens).min(n_ctx_limit as usize);
 
+        // FIX: Inject deterministic sampling constraints during high-speed query routing actions.
+        // When checking for script compliance or doing rapid structural intent classifications,
+        // we forcefully evaluate maximum logit values without fuzzy sampling thresholds to bypass CoT cycles.
         while n_cur < absolute_max {
             if is_cancelled.load(Ordering::Relaxed) {
                 println!("\n[LLM] Request cancelled by client during generation.");
@@ -164,7 +152,6 @@ impl LlmCore {
             
             let mut best_token = self.model.token_eos();
             let mut max_logit = f32::NEG_INFINITY;
-
             for cand in candidates {
                 if cand.logit() > max_logit {
                     max_logit = cand.logit();
@@ -184,14 +171,14 @@ impl LlmCore {
             print!("{}", token_str);
             let _ = std::io::stdout().flush();
 
-            if output.contains("<|end|>") 
-                || output.contains("<|user|>") 
-                || output.contains("<|assistant|>") 
-                || output.contains("<|eot_id|>") 
-                || output.contains("<|im_end|>") 
-                || output.contains("<|im_start|>")
-                || output.contains("<|endoftext|>")
-                || output.contains("</s>") 
+            if token_str.contains("<|end|>") 
+                || token_str.contains("<|user|>") 
+                || token_str.contains("<|assistant|>") 
+                || token_str.contains("<|eot_id|>") 
+                || token_str.contains("<|im_end|>") 
+                || token_str.contains("<|im_start|>")
+                || token_str.contains("<|endoftext|>")
+                || token_str.contains("</s>") 
             {
                 break;
             }
@@ -209,26 +196,39 @@ impl LlmCore {
 
         println!("\n[LLM] Request complete.");
         
+        let mut final_output = output;
+        
+        // Safe <think> Tag Stripper
+        while let Some(start_idx) = final_output.find("<think>") {
+            if let Some(end_idx) = final_output.find("</think>") {
+                let before = &final_output[..start_idx];
+                let after = &final_output[end_idx + 8..];
+                final_output = format!("{}{}", before, after);
+            } else {
+                let before = &final_output[..start_idx];
+                let after = &final_output[start_idx + 7..];
+                final_output = format!("{}{}", before, after);
+                break;
+            }
+        }
+        
+        if let Some(end_idx) = final_output.find("</think>") {
+            final_output = final_output[end_idx + 8..].to_string();
+        }
+        
+        final_output = final_output.trim().to_string();
+
         println!("\n=======================================================================================");
         println!("[DEBUG] STRATEGY: [{}]", strategy_name.to_uppercase());
         println!("[DEBUG] RAW GENERATED LLM RESPONSE:");
         println!("---------------------------------------------------------------------------------------");
-        println!("{}", output);
+        println!("{}", final_output);
         println!("=======================================================================================\n");
 
-        output
+        final_output
     }
 }
 
-// =====================================================================
-// 3. SHARED DOMAIN UTILITIES
-// =====================================================================
-
-/// ARCHITECTURE CHANGE: Overhauled Semantic Sliding Window.
-/// The previous iteration relied on exact matching, causing semantic mismatches to drop context entirely.
-/// This implementation segments the text into broad semantic blocks and uses a robust term-frequency density 
-/// check, falling back gracefully to the document head if no strong density is found, rather than cutting the 
-/// text blindly.
 pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize) -> String {
     let stop_words = [
         "what", "how", "why", "who", "when", "the", "and", "for", "with", "that", "this", "are", "you", "from", "does", "was", "is", "a", "an", "of", "in", "to",
@@ -242,7 +242,7 @@ pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize)
 
     let lower_text = text.to_lowercase();
     let clean_cond: String = condition.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
-
+    
     let query_terms: Vec<&str> = clean_cond.split_whitespace()
         .filter(|t| t.len() > 2 && !stop_words.contains(t))
         .collect();
@@ -252,7 +252,6 @@ pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize)
         return format!("{}...[TRUNCATED]", safe_head);
     }
 
-    // Identify all byte-positions of query terms in the text
     let mut positions = Vec::new();
     for term in &query_terms {
         let mut start = 0;
@@ -263,7 +262,6 @@ pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize)
         }
     }
 
-    // Fallback if semantic intent drifted too far from exact keywords
     if positions.is_empty() {
         let safe_head = text.chars().take(window_chars).collect::<String>();
         return format!("{}...[TRUNCATED]", safe_head);
@@ -271,16 +269,15 @@ pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize)
 
     positions.sort_unstable();
     
-    // Find the window with the highest density of term occurrences
     let mut best_byte_start = positions[0];
     let mut max_density = 0;
-    let window_bytes = window_chars * 2; // Approximate byte width for utf-8 characters
+    let window_bytes = window_chars * 2; 
 
     for i in 0..positions.len() {
         let start_pos = positions[i];
         let end_pos = start_pos + window_bytes;
+        
         let mut count = 0;
-
         for j in i..positions.len() {
             if positions[j] < end_pos {
                 count += 1;
@@ -295,13 +292,11 @@ pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize)
         }
     }
 
-    // Safely walk backwards to snap to the nearest word boundary
     let mut safe_byte_start = best_byte_start.saturating_sub(150);
     while safe_byte_start > 0 && !text.is_char_boundary(safe_byte_start) {
         safe_byte_start -= 1;
     }
     
-    // Extract by character count safely to prevent slicing panics
     let extracted: String = text[safe_byte_start..].chars().take(window_chars).collect();
     
     if safe_byte_start == 0 {
@@ -310,10 +305,6 @@ pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize)
         format!("...{}...", extracted)
     }
 }
-
-// =====================================================================
-// 4. ORCHESTRATOR FACADE
-// =====================================================================
 
 pub struct LlmService {
     engine: Arc<Mutex<LlmCore>>,
@@ -340,11 +331,13 @@ impl LlmService {
         
         ModelManager::set_active_model(model_id)?;
         engine_guard.model = new_model;
+
         Ok(())
     }
 
     pub fn determine_intent(&self, query: &str, explicit_synthesis: bool, filter_strategy: Option<String>, is_cancelled: Arc<AtomicBool>) -> LlmIntent {
         if explicit_synthesis { return LlmIntent::SynthesizeAnswer; }
+
         let strategy = IntentStrategy;
         let core = self.engine.lock().unwrap();
         strategy.execute(&core, (query.to_string(), filter_strategy), is_cancelled)
@@ -356,10 +349,10 @@ impl LlmService {
         strategy.execute(&core, (condition.to_string(), candidates), is_cancelled)
     }
 
-    pub fn generate_synthesis(&self, query: &str, context_docs: Vec<SearchResult>, is_cancelled: Arc<AtomicBool>) -> serde_json::Value {
+    pub fn generate_synthesis(&self, query: &str, core_concept: &str, context_docs: Vec<SearchResult>, is_cancelled: Arc<AtomicBool>) -> serde_json::Value {
         let strategy = SynthesisStrategy;
         let core = self.engine.lock().unwrap();
-        strategy.execute(&core, (query.to_string(), context_docs), is_cancelled)
+        strategy.execute(&core, (query.to_string(), core_concept.to_string(), context_docs), is_cancelled)
     }
 
     pub fn compile_query_to_ast(&self, query: &str, schema_keys: Vec<String>, is_cancelled: Arc<AtomicBool>) -> serde_json::Value {
@@ -372,6 +365,18 @@ impl LlmService {
         let strategy = ScriptCompilerStrategy;
         let core = self.engine.lock().unwrap();
         strategy.execute(&core, (query.to_string(), schema_keys), is_cancelled)
+    }
+
+    pub fn fix_script_syntax(&self, query: &str, broken_script: &str, error_msg: &str, schema_keys: Vec<String>, is_cancelled: Arc<AtomicBool>) -> String {
+        let strategy = ScriptFixerStrategy;
+        let core = self.engine.lock().unwrap();
+        strategy.execute(&core, (query.to_string(), broken_script.to_string(), error_msg.to_string(), schema_keys), is_cancelled)
+    }
+
+    pub fn evaluate_script_logic(&self, query: &str, compiled_script: &str, schema_keys: Vec<String>, is_cancelled: Arc<AtomicBool>) -> String {
+        let strategy = ScriptEvaluatorStrategy;
+        let core = self.engine.lock().unwrap();
+        strategy.execute(&core, (query.to_string(), compiled_script.to_string(), schema_keys), is_cancelled)
     }
 
     pub fn apply_temporal_heuristics(&self, query: &mut SearchQuery, is_cancelled: Arc<AtomicBool>) {
@@ -394,11 +399,12 @@ impl LlmService {
             Keywords: reset administrator password cisco router\n\n\
             Question: \"{}\"\n\
             <|im_end|>\n\
-            <|im_start|>assistant\n\
-            Keywords: ", query
+            <|im_start|>assistant\n<think>\n</think>\n", query
         );
+
         let core = self.engine.lock().unwrap();
-        let response = core.generate_text("KEYWORD_EXTRACTION", &prompt, 20, is_cancelled);
+        let response = core.generate_text("KEYWORD_EXTRACTION", &prompt, 150, is_cancelled);
+
         response.replace("Keywords:", "").trim().to_string()
     }
 }

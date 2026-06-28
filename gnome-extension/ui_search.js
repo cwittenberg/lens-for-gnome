@@ -648,16 +648,17 @@ class GnomeLensSearchBar extends St.BoxLayout {
         let state = event.get_state();
         let text = this._entry.get_text();
         let len = text.length;
+        let isShift = (state & Clutter.ModifierType.SHIFT_MASK) !== 0;
 
         // INTERCEPT: When a video preview is active, capture Arrow Left and Arrow Right 
         // keys directly inside the search textfield. Divert them to scrub the video 
         // instead of shifting the text insertion cursor.
         if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
             if (symbol === Clutter.KEY_Right) {
-                if (this.callbacks.onScrub) this.callbacks.onScrub(5);
+                if (this.callbacks.onScrub) this.callbacks.onScrub(isShift ? 0.20 : 5, isShift);
                 return Clutter.EVENT_STOP;
             } else if (symbol === Clutter.KEY_Left) {
-                if (this.callbacks.onScrub) this.callbacks.onScrub(-5);
+                if (this.callbacks.onScrub) this.callbacks.onScrub(isShift ? -0.20 : -5, isShift);
                 return Clutter.EVENT_STOP;
             }
         }

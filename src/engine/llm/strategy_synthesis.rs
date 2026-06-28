@@ -2,18 +2,17 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::domain::SearchResult;
 use super::{LlmStrategy, LlmCore, extract_relevant_window};
 
 pub struct SynthesisStrategy;
 
 impl LlmStrategy for SynthesisStrategy {
-    type Input = (String, Vec<SearchResult>);
+    type Input = (String, String, Vec<SearchResult>);
     type Output = serde_json::Value;
 
     fn execute(&self, core: &LlmCore, input: Self::Input, is_cancelled: Arc<AtomicBool>) -> Self::Output {
-        let (query, mut context_docs) = input;
+        let (query, core_concept, mut context_docs) = input;
         
         if is_cancelled.load(Ordering::Relaxed) {
             return serde_json::json!({
@@ -25,7 +24,8 @@ impl LlmStrategy for SynthesisStrategy {
             });
         }
 
-        context_docs.truncate(15);
+        // Limit to 5 sources to prevent LLM context window exhaustion
+        context_docs.truncate(5);
         
         let mut context_block = String::new();
         
@@ -45,8 +45,11 @@ impl LlmStrategy for SynthesisStrategy {
                     ));
                 } else {
                     let content = doc.full_context.as_deref().unwrap_or(&doc.snippet);
-                    let safe_content = extract_relevant_window(content, &query, 1200);
-
+                    
+                    // Use the core_concept (distilled keywords) instead of the raw conversational query
+                    // to anchor the sliding window tightly around the factual data paragraphs.
+                    let safe_content = extract_relevant_window(content, &core_concept, 1200);
+                    
                     context_block.push_str(&format!(
                         "--- BEGIN SOURCE [{}] ---\nFilename: {}\nDate: {}\nAuthor: {}\nContent:\n{}\n--- END SOURCE [{}] ---\n\n", 
                         i + 1, doc.title, doc_date, doc_author, safe_content, i + 1
@@ -83,7 +86,6 @@ impl LlmStrategy for SynthesisStrategy {
         if let Some(end_idx) = clean_response.find("</think>") {
             clean_response = clean_response[end_idx + 8..].trim().to_string();
         }
-
         let full_response = format!("ANSWER: {}", clean_response);
         
         let mut sources_str = String::new();
@@ -112,7 +114,6 @@ impl LlmStrategy for SynthesisStrategy {
         }
         
         let mut raw_cited_indices = std::collections::HashSet::new();
-
         // Map all non-digits to spaces, then split by whitespace to prevent parsing errors.
         let numbers_only: String = sources_str.chars().map(|c| if c.is_ascii_digit() { c } else { ' ' }).collect();
         for part in numbers_only.split_whitespace() {
@@ -121,7 +122,7 @@ impl LlmStrategy for SynthesisStrategy {
             }
         }
         
-        for i in 1..=15 {
+        for i in 1..=5 {
             let marker1 = format!("[{}]", i);
             let marker2 = format!("Source [{}]", i);
             if answer.contains(&marker1) || answer.contains(&marker2) {

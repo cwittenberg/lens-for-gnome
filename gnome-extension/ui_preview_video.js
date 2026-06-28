@@ -10,8 +10,65 @@ let Gst = null;
 let GstLoaded = false;
 let GstLoadFailed = false;
 
-// Global persistent storage across session preview item changes
+const HISTORY_FILE = GLib.build_filenamev([GLib.get_user_cache_dir(), 'gnome-lens-playback.json']);
 export const PlaybackHistory = new Map();
+let _historyLoadPromise = null;
+
+function ensureHistoryLoaded() {
+    if (_historyLoadPromise) return _historyLoadPromise;
+    
+    _historyLoadPromise = new Promise((resolve) => {
+        let file = Gio.File.new_for_path(HISTORY_FILE);
+        if (!file.query_exists(null)) {
+            resolve();
+            return;
+        }
+        
+        file.load_contents_async(null, (f, res) => {
+            try {
+                let [success, contents] = f.load_contents_finish(res);
+                if (success) {
+                    let data = JSON.parse(new TextDecoder().decode(contents));
+                    for (let [k, v] of Object.entries(data)) {
+                        PlaybackHistory.set(k, v);
+                    }
+                }
+            } catch (e) {
+                console.warn(`[Gnome Lens] Failed to parse playback history: ${e}`);
+            }
+            resolve();
+        });
+    });
+    
+    return _historyLoadPromise;
+}
+
+function savePlaybackHistoryAsync() {
+    if (PlaybackHistory.size > 50) {
+        let keys = Array.from(PlaybackHistory.keys());
+        let keysToRemove = keys.slice(0, PlaybackHistory.size - 50);
+        for (let k of keysToRemove) PlaybackHistory.delete(k);
+    }
+
+    let file = Gio.File.new_for_path(HISTORY_FILE);
+    let obj = Object.fromEntries(PlaybackHistory);
+    let bytes = new GLib.Bytes(new TextEncoder().encode(JSON.stringify(obj)));
+    
+    file.replace_contents_bytes_async(
+        bytes,
+        null,
+        false,
+        Gio.FileCreateFlags.REPLACE_DESTINATION,
+        null,
+        (f, res) => {
+            try {
+                f.replace_contents_finish(res);
+            } catch(e) {
+                console.warn(`[Gnome Lens] Failed to write playback history to disk: ${e}`);
+            }
+        }
+    );
+}
 
 async function ensureGst() {
     if (GstLoaded) return true;
@@ -232,10 +289,9 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             reactive: true
         });
 
+        this._isDestroyed = false;
         this._filepath = filepath;
-        
-        // Instant context restore validation
-        this._currentTimeNs = PlaybackHistory.get(this._filepath) || 0;
+        this._currentTimeNs = 0;
         this._hasRestoredPosition = false;
         
         this._durationNs = 0;
@@ -276,7 +332,6 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         this._controlsHUD.y_align = Clutter.ActorAlign.END;
         this.add_child(this._controlsHUD);
 
-        // Track interactions inside the media container layout box bounds
         this.connectObject('captured-event', (actor, event) => {
             let type = event.type();
             if (type === Clutter.EventType.MOTION || type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.SCROLL) {
@@ -288,7 +343,13 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         this.connectObject('destroy', this._onDestroy.bind(this), this);
 
         this._resetHideTimer();
-        this._startGstVideo();
+        
+        ensureHistoryLoaded().then(() => {
+            if (this._isDestroyed) return;
+            this._currentTimeNs = PlaybackHistory.get(this._filepath) || 0;
+            this._hasRestoredPosition = (this._currentTimeNs === 0);
+            this._startGstVideo();
+        });
     }
 
     _resetHideTimer() {
@@ -310,7 +371,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
     }
 
     saveCurrentPosition() {
-        if (this._pipeline) {
+        if (this._pipeline && this._hasRestoredPosition) {
             let [success, pos] = this._pipeline.query_position(Gst.Format.TIME);
             if (success && pos > 0) {
                 this._currentTimeNs = pos;
@@ -318,34 +379,49 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         }
         if (this._currentTimeNs > 0) {
             PlaybackHistory.set(this._filepath, this._currentTimeNs);
+            savePlaybackHistoryAsync();
         }
     }
 
-    scrub(offsetSeconds) {
+    scrub(offset, isPercentage = false) {
         this._resetHideTimer();
 
         if (this._pipeline) {
             let pos;
-            // Base the next target on our intended seek time to avoid snapping 
-            // backwards to older keyframes on rapid scrolling events 
             if (this._isSeeking && this._targetSeekNs !== undefined) {
                 pos = this._targetSeekNs;
             } else {
                 let [success, qpos] = this._pipeline.query_position(Gst.Format.TIME);
-                pos = success ? qpos : this._currentTimeNs;
+                pos = (success && this._hasRestoredPosition) ? qpos : this._currentTimeNs;
             }
 
-            let targetNs = Math.round(pos + (offsetSeconds * 1000000000));
+            let targetNs;
+            if (isPercentage) {
+                if (this._durationNs <= 0) return;
+                targetNs = Math.round(pos + (this._durationNs * offset));
+            } else {
+                targetNs = Math.round(pos + (offset * 1000000000));
+            }
+
             if (targetNs < 0) targetNs = 0;
             if (this._durationNs > 0 && targetNs > this._durationNs) targetNs = this._durationNs;
 
             this._targetSeekNs = targetNs;
             this._isSeeking = true;
 
-            // Strictly use FLUSH to guarantee exact positioning instead of snapping backward to past keyframes
             this._pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH, targetNs);
         } else {
-            this._currentTimeNs = Math.max(0, Math.round(this._currentTimeNs + (offsetSeconds * 1000000000)));
+            if (isPercentage) {
+                if (this._durationNs > 0) {
+                    this._currentTimeNs = Math.max(0, Math.round(this._currentTimeNs + (this._durationNs * offset)));
+                    if (this._currentTimeNs > this._durationNs) this._currentTimeNs = this._durationNs;
+                } else {
+                    let fallbackOffset = offset > 0 ? 30 : -30;
+                    this._currentTimeNs = Math.max(0, Math.round(this._currentTimeNs + (fallbackOffset * 1000000000)));
+                }
+            } else {
+                this._currentTimeNs = Math.max(0, Math.round(this._currentTimeNs + (offset * 1000000000)));
+            }
             this._extractFrameAndScheduleNext(true);
         }
     }
@@ -390,6 +466,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
     }
 
     _onDestroy() {
+        this._isDestroyed = true;
         this.saveCurrentPosition();
         this._stopVideo();
     }
@@ -470,12 +547,15 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                     if (success) this._durationNs = dur;
                 } else if (message.type === Gst.MessageType.ASYNC_DONE) {
                     this._isSeeking = false;
-                    if (!this._hasRestoredPosition && this._currentTimeNs > 0) {
+                    if (!this._hasRestoredPosition) {
                         this._pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH, this._currentTimeNs);
                         this._hasRestoredPosition = true;
                     }
                 } else if (message.type === Gst.MessageType.EOS) {
                     if (this._pipeline) {
+                        this._currentTimeNs = 0;
+                        PlaybackHistory.delete(this._filepath);
+                        savePlaybackHistoryAsync();
                         this._pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH, 0);
                     }
                 } else if (message.type === Gst.MessageType.ERROR) {
@@ -492,8 +572,10 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             this._playbackTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
                 if (!this._sink || !this.visible || !this._pipeline) return GLib.SOURCE_CONTINUE;
                 
-                let [successPos, pos] = this._pipeline.query_position(Gst.Format.TIME);
-                if (successPos) this._currentTimeNs = pos;
+                if (this._hasRestoredPosition) {
+                    let [successPos, pos] = this._pipeline.query_position(Gst.Format.TIME);
+                    if (successPos) this._currentTimeNs = pos;
+                }
 
                 let [successDur, dur] = this._pipeline.query_duration(Gst.Format.TIME);
                 if (successDur) this._durationNs = dur;

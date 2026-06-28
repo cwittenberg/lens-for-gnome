@@ -1,19 +1,12 @@
-// src/engine/router/script.rs
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{SystemTime, UNIX_EPOCH};
 use fancy_regex::Regex;
 use crate::domain::SearchResult;
-use crate::engine::llm::LlmService;
-use super::ast::execute_ast;
 
-/// Primary execution hub for the Scripting Engine Strategy.
-pub fn execute_script(
-    script: &str,
-    mut candidates: Vec<SearchResult>,
-    llm: &Arc<LlmService>,
-    is_cancelled: Arc<AtomicBool>,
-) -> Vec<SearchResult> {
+/// Exposes the strictly configured Rhai Engine so the Router can perform 
+/// dry-run syntax compilations in the agentic feedback loop before execution.
+pub fn build_rhai_engine() -> rhai::Engine {
     let mut engine = rhai::Engine::new();
     
     // --- Standard Library Injections ---
@@ -93,14 +86,18 @@ pub fn execute_script(
         now - (days * 86400.0)
     });
 
-    let ast = match engine.compile(script) {
-        Ok(ast) => ast,
-        Err(e) => {
-            println!("[Router DEBUG] Rhai script compilation failed: {}\nScript:\n{}", e, script);
-            // Fallback to the AST Search heuristic if the script fails compilation
-            return execute_ast(&serde_json::json!(["SEARCH", script]), candidates, llm, Arc::clone(&is_cancelled));
-        }
-    };
+    engine
+}
+
+/// Primary execution hub for the Scripting Engine Strategy.
+/// Accepts a pre-compiled, validated AST guaranteed by the Agentic LLM Loop.
+pub fn execute_script(
+    ast: &rhai::AST,
+    mut candidates: Vec<SearchResult>,
+    is_cancelled: Arc<AtomicBool>,
+) -> Vec<SearchResult> {
+    
+    let engine = build_rhai_engine();
 
     candidates.retain(|doc| {
         if is_cancelled.load(std::sync::atomic::Ordering::Relaxed) {
@@ -119,7 +116,7 @@ pub fn execute_script(
         scope.push("text", content.to_string());
         scope.push("title", doc.title.clone());
 
-        let result: Result<bool, Box<rhai::EvalAltResult>> = engine.eval_ast_with_scope(&mut scope, &ast);
+        let result: Result<bool, Box<rhai::EvalAltResult>> = engine.eval_ast_with_scope(&mut scope, ast);
         
         match result {
             Ok(true) => true,
@@ -133,7 +130,7 @@ pub fn execute_script(
     
     for doc in &mut candidates {
         doc.ai_matched = Some(true);
-        let reason_str = "Matched via LLM System Script".to_string();
+        let reason_str = "AI".to_string();
         if let Some(prev) = &doc.ai_reasoning {
             doc.ai_reasoning = Some(format!("{} ∧ {}", prev, reason_str));
         } else {

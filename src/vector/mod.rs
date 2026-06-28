@@ -27,7 +27,7 @@ impl VectorStore {
             "
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
-            PRAGMA mmap_size = 10000000000;
+            PRAGMA mmap_size = 30000000000; 
             PRAGMA temp_store = MEMORY;
             PRAGMA cache_size = -2000000;
             "
@@ -84,6 +84,15 @@ impl VectorStore {
             [],
         ).expect("Failed to create base tables");
 
+        println!("[Database] Proactively building performance indexes for JSON metadata and paths...");
+        conn.execute_batch(
+            "
+            CREATE INDEX IF NOT EXISTS idx_documents_lower_id ON documents(LOWER(id));
+            CREATE INDEX IF NOT EXISTS idx_docs_metadata_filetype ON documents(LOWER(json_extract(metadata, '$.filetype')));
+            CREATE INDEX IF NOT EXISTS idx_docs_metadata_domain ON documents(LOWER(json_extract(metadata, '$.domain')));
+            "
+        ).expect("Failed to create performance expression indexes");
+
         let mut needs_fts_migration = false;
         let mut fts_exists = false;
 
@@ -132,6 +141,9 @@ impl VectorStore {
         println!("[Database] Normalizing existing timestamps to stable UNIX seconds...");
         conn.execute("UPDATE documents SET modified_at = modified_at / 1000000000 WHERE modified_at > 1000000000000000", []).ok();
         conn.execute("UPDATE documents SET modified_at = modified_at / 1000 WHERE modified_at > 1000000000000", []).ok();
+
+        println!("[Database] Running startup WAL checkpoint to ensure continuous disk read performance...");
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE)", []).ok();
 
         println!("[Database] Loading embeddings and metadata into RAM for instant search...");
         let mut cache = HashMap::new();
@@ -267,7 +279,6 @@ impl VectorStore {
         conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![path]).ok();
         conn.execute("COMMIT", []).ok();
 
-        // FIX: Replaced `self.cache.remove` with appropriate hashmap write-lock `.remove()` method 
         let mut cache_guard = self.cache.write().unwrap();
         cache_guard.remove(path);
     }
@@ -422,7 +433,13 @@ impl VectorStore {
         let semantic_query = clean_query_text
             .split_whitespace()
             .filter(|w| w.len() > 2 && !stop_words.contains(w) && !exact_phrases.contains(&w.to_string()))
-            .map(|w| format!("\"{}\"*", w)) 
+            .map(|w| {
+                if w.len() >= 4 {
+                    format!("\"{}\"*", w)
+                } else {
+                    format!("\"{}\"", w)
+                }
+            }) 
             .collect::<Vec<_>>()
             .join(" OR ");
 
@@ -449,13 +466,10 @@ impl VectorStore {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        // FULL SCHEMA PUSH DOWN: Construct a dynamic SQL boundary via UNION to evaluate BOTH
-        // FTS structural matches AND direct LIKE pathway fallbacks for folders in a single round-trip.
         let mut sql_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         let mut sql_base = String::new();
 
         if has_fts_query {
-            // MATCH 1: FTS Semantic Queries mapped to File content or Filename natively
             sql_base.push_str("SELECT fts.id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip, docs.modified_at as rank_val 
                                FROM documents_fts fts
                                JOIN documents docs ON fts.id = docs.id
@@ -483,14 +497,12 @@ impl VectorStore {
             sql_base.push_str("\nUNION\n");
         }
 
-        // MATCH 2: Strict Directory Pathway matching as explicitly requested via user wildcard format `<folder>%<search>%`
         sql_base.push_str("SELECT docs.id, '' as snip, docs.modified_at as rank_val 
                            FROM documents docs
                            WHERE 1=1");
 
         if let Some(dir) = directory_filter {
             if !clean_q_for_like.is_empty() {
-                // Incorporate dual wildcard parameters to capture embedded matching inside deep directories
                 sql_base.push_str(" AND (LOWER(docs.id) LIKE LOWER(?) OR LOWER(docs.id) LIKE LOWER(?))");
                 sql_params.push(Box::new(format!("{}%{}", dir, clean_q_for_like))); 
                 sql_params.push(Box::new(format!("{}%{}%", dir, clean_q_for_like))); 
@@ -517,7 +529,7 @@ impl VectorStore {
             sql_params.push(Box::new(val.clone()));
         }
 
-        sql_base.push_str(" ORDER BY rank_val DESC LIMIT 100");
+        sql_base.push_str(" ORDER BY rank_val DESC");
 
         if let Ok(mut fts_stmt) = conn.prepare(&sql_base) {
             let ref_params: Vec<&dyn rusqlite::ToSql> = sql_params.iter().map(|b| b.as_ref()).collect();
@@ -547,8 +559,8 @@ impl VectorStore {
 
         let mut candidate_scores: Vec<(String, f32, Option<String>, Option<String>)> = cache_guard.iter()
             .filter(|(_, doc)| {
-                // If the item wasn't extracted directly via the exhaustive SQL engine, securely drop it now
-                if !fts_matches.contains_key(&doc.id) {
+                // If semantic search is running, do not drop files unless we have too many candidates
+                if is_dummy_vector && !fts_matches.contains_key(&doc.id) {
                     return false;
                 }
                 
@@ -616,16 +628,16 @@ impl VectorStore {
             } else {
                 let v_rrf = if v_rank < 1000.0 { 1.0 / (rrf_k + v_rank) } else { 0.0 };
                 let f_rrf = if f_rank < 1000.0 { 1.0 / (rrf_k + f_rank) } else { 0.0 };
-                v_rrf + f_rrf
+                v_rrf + (f_rrf * 0.5) 
             };
 
             let is_fts_match = f_rank < 1000.0;
 
             if contains_specifics {
                 if is_fts_match {
-                    rrf_score *= 3.0; 
+                    rrf_score *= 1.5; 
                 } else {
-                    rrf_score *= 0.05; 
+                    rrf_score *= 0.5; 
                 }
             }
 
@@ -635,7 +647,7 @@ impl VectorStore {
             let is_exact = parsed_filename == q_lower || parsed_filename.starts_with(&format!("{}.", q_lower));
             
             if is_exact {
-                rrf_score += 15.0_f32;
+                rrf_score += 0.05_f32;
             } else {
                 let terms: Vec<&str> = q_lower.split_whitespace().filter(|w| w.len() > 1).collect();
                 let mut all_match = !terms.is_empty();
@@ -650,13 +662,13 @@ impl VectorStore {
                 }
                 
                 if all_match {
-                    rrf_score += 5.0_f32;
+                    rrf_score += 0.02_f32;
                 } else if any_match {
-                    rrf_score += 1.5_f32;
+                    rrf_score += 0.005_f32;
                 }
                 
                 if (all_match || any_match) && is_shallow_opt.as_deref() == Some("true") {
-                    rrf_score += 3.0_f32;
+                    rrf_score += 0.01_f32;
                 }
             }
 
@@ -667,6 +679,12 @@ impl VectorStore {
 
         scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         
+        // RE-INTRODUCED UPPER THRESHOLD BATCH CAP FOR RAG CONTEXT PURITY:
+        // We allow infinite results when executing custom scripts, but for general vector searches or 
+        // synthesis prompts, capping the pipeline at 100 high-confidence entries prevents the LLM 
+        // context sliding window from choking on noise or system file garbage.
+        scored_candidates.truncate(100);
+
         if prioritize_folders {
             let mut top_folders = Vec::new();
             let mut remaining = Vec::new();
@@ -677,11 +695,8 @@ impl VectorStore {
                     remaining.push(cand);
                 }
             }
-            remaining.truncate(100 - top_folders.len());
             scored_candidates = top_folders;
             scored_candidates.extend(remaining);
-        } else {
-            scored_candidates.truncate(100); 
         }
 
         let mut results = Vec::new();
@@ -849,7 +864,6 @@ impl VectorStore {
                 .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
         });
 
-        results.truncate(250);
         results
     }
 }
