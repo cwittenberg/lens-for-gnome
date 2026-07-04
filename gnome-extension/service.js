@@ -62,6 +62,7 @@ export default class ServiceClient {
             try {
                 lineData = stream.read_line_finish_utf8(res);
             } catch (error) {
+                console.debug(`[Lens for GNOME] Stream read line error: ${error.message}`);
                 return;
             }
 

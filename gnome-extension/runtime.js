@@ -154,6 +154,7 @@ class RuntimeAdapter {
                                         this.cleanupIPC(connection, inputStream, outputStream);
                                     }
                                 } catch (e) {
+                                    console.debug(`[Lens for GNOME] IPC socket read error: ${e.message}`);
                                     this.cleanupIPC(connection, inputStream, outputStream);
                                 }
                             });

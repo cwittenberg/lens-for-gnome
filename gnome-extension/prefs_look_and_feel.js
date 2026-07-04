@@ -220,6 +220,7 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
                     themeRow.set_subtitle(path);
                 }
             } catch (e) {
+                console.debug(`[Lens for GNOME] Theme file selection failed or cancelled: ${e.message}`);
             }
         });
     });

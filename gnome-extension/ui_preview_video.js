@@ -29,7 +29,7 @@ function ensureHistoryLoaded() {
                     }
                 }
             } catch (e) {
-                // File does not exist or JSON parse error, proceed normally.
+                console.debug(`[Lens for GNOME] History load note: ${e.message}`);
             }
             resolve();
         });
@@ -497,7 +497,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         if (this._lastTempFile) {
             let file = Gio.File.new_for_path(this._lastTempFile);
             file.delete_async(GLib.PRIORITY_DEFAULT, null, (f, res) => {
-                try { f.delete_finish(res); } catch(e) {}
+                try { f.delete_finish(res); } catch(e) { console.debug(`[Lens for GNOME] temp file delete failed: ${e.message}`); }
             });
             this._lastTempFile = null;
         }
@@ -644,27 +644,25 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             
             let pixelFormat = Cogl.PixelFormat.RGBA_8888;
             let bytesSuccess = false;
-            
-            try {
-                let glibBytes = (data instanceof GLib.Bytes) ? data : new GLib.Bytes(data);
-                let coglCtx = null;
-                
-                try {
-                    if (global.stage && global.stage.context) {
-                        coglCtx = global.stage.context.get_backend().get_cogl_context();
-                    }
-                } catch(e) { console.debug(`[Lens for GNOME] Cogl stage context derivation error: ${e.message}`); }
+            let glibBytes = (data instanceof GLib.Bytes) ? data : new GLib.Bytes(data);
+            let coglCtx = null;
 
-                if (coglCtx) {
-                    try {
-                        bytesSuccess = this._imageContent.set_bytes(coglCtx, glibBytes, pixelFormat, width, height, width * 4);
-                    } catch(e1) {
-                        bytesSuccess = this._imageContent.set_bytes(glibBytes, pixelFormat, width, height, width * 4);
-                    }
-                } else {
+            if (global.stage && global.stage.context) {
+                let backend = global.stage.context.get_backend();
+                if (backend && typeof backend.get_cogl_context === 'function') {
+                    coglCtx = backend.get_cogl_context();
+                }
+            }
+
+            if (coglCtx) {
+                try {
+                    bytesSuccess = this._imageContent.set_bytes(coglCtx, glibBytes, pixelFormat, width, height, width * 4);
+                } catch(e1) {
                     bytesSuccess = this._imageContent.set_bytes(glibBytes, pixelFormat, width, height, width * 4);
                 }
-            } catch (err) { console.debug(`[Lens for GNOME] Cogl rendering error: ${err.message}`); }
+            } else {
+                bytesSuccess = this._imageContent.set_bytes(glibBytes, pixelFormat, width, height, width * 4);
+            }
             
             if (bytesSuccess) {
                 this._imageActor.queue_redraw();
@@ -708,11 +706,11 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                     try {
                         f.query_info_finish(resInfo);
                         exists = true;
-                    } catch (e) {}
+                    } catch (e) { console.debug(`[Lens for GNOME] ffmpeg query info failed: ${e.message}`); }
 
                     if (exists) {
                         if (!this.visible) {
-                            f.delete_async(GLib.PRIORITY_DEFAULT, null, (df, dres) => { try { df.delete_finish(dres); } catch(e) {} });
+                            f.delete_async(GLib.PRIORITY_DEFAULT, null, (df, dres) => { try { df.delete_finish(dres); } catch(e) { console.debug(`[Lens for GNOME] Unused file cleanup failed: ${e.message}`); } });
                             return;
                         }
                         
@@ -721,7 +719,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                         
                         if (this._lastTempFile) {
                             let lastFile = Gio.File.new_for_path(this._lastTempFile);
-                            lastFile.delete_async(GLib.PRIORITY_DEFAULT, null, (df, dres) => { try { df.delete_finish(dres); } catch(e) {} });
+                            lastFile.delete_async(GLib.PRIORITY_DEFAULT, null, (df, dres) => { try { df.delete_finish(dres); } catch(e) { console.debug(`[Lens for GNOME] Previous temp file deletion failed: ${e.message}`); } });
                         }
                         this._lastTempFile = tempFile;
                     }

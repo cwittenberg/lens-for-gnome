@@ -1,3 +1,4 @@
+// gnome-extension/ui_results.js
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
@@ -225,10 +226,12 @@ class GnomeLensResultsList extends St.ScrollView {
             try {
                 f.query_info_finish(res);
                 exists = true;
-            } catch(e) {}
+            } catch(e) {
+                console.debug(`[Lens for GNOME] Target parent directory does not exist: ${e.message}`);
+            }
             if (!exists) {
                 parent.make_directory_async(GLib.PRIORITY_DEFAULT, cancellable, (pf, pres) => {
-                    try { pf.make_directory_finish(pres); } catch(e) {}
+                    try { pf.make_directory_finish(pres); } catch(e) { console.debug(`[Lens for GNOME] Failed to make parent directory: ${e.message}`); }
                 });
             }
         });

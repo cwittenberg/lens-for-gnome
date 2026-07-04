@@ -1,6 +1,6 @@
 {
   "name": "Lens",
-  "description": "Spotlight-alike intelligent search utilizing the local Lens for GNOME Daemon.",
+  "description": "Spotlight-alike intelligent search utilizing the local Lens for GNOME service.",
   "uuid": "lens-for-gnome@cwittenberg",
   "shell-version": [
     "50"

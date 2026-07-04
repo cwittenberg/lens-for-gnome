@@ -1,4 +1,3 @@
-// gnome-extension/prefs_index.js
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
@@ -228,7 +227,9 @@ export function buildIndexPage(settings, window) {
                 });
                 launcher.set_environ(GLib.get_environ());
                 launcher.spawnv(['systemctl', '--user', 'stop', 'snap.lens-for-gnome.daemon.service']);
-            } catch (e) {}
+            } catch (e) {
+                console.debug(`[Lens for GNOME] Snap daemon stop command failed: ${e.message}`);
+            }
         }
         
         safeTimeout(1000, () => {
@@ -404,6 +405,7 @@ export function buildIndexPage(settings, window) {
                     }
                 }
             } catch (e) {
+                console.debug(`[Lens for GNOME] Folder selection failed or cancelled: ${e.message}`);
             }
         });
     });
