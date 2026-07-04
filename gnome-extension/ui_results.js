@@ -26,6 +26,14 @@ class GnomeLensResultsList extends St.ScrollView {
         this._lastPointerX = -1;
         this._lastPointerY = -1;
         this._ignoreHover = false;
+        
+        // Virtual Scrolling Window Configurations
+        this._totalHits = 0;
+        this._renderedCount = 0;
+        this._chunkSize = 25;
+        this._currentGroup = -2;
+        this._bestMatchesLength = 0;
+        this._scrollConnected = false;
 
         this._resultsBox = new St.BoxLayout({
             vertical: true,
@@ -40,7 +48,6 @@ class GnomeLensResultsList extends St.ScrollView {
         let state = keyEvent.get_state();
         let isShift = (state & Clutter.ModifierType.SHIFT_MASK) !== 0;
         
-        // INTERCEPT: If a video preview is active, pass arrow keys down instead of swallowing them
         if (symbol === Clutter.KEY_Right) {
             if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
                 if (this.callbacks.onScrub) this.callbacks.onScrub(isShift ? 0.20 : 5, isShift);
@@ -83,6 +90,9 @@ class GnomeLensResultsList extends St.ScrollView {
     }
     
     getCount() { 
+        if (this._results.length > 0 && this._results[0].metadata && this._results[0].metadata.sys_total_hits) {
+            return parseInt(this._results[0].metadata.sys_total_hits, 10);
+        }
         return this._results.length; 
     }
     
@@ -91,7 +101,7 @@ class GnomeLensResultsList extends St.ScrollView {
     }
 
     selectNext() {
-        if (this._resultWidgets.length > 0 && this._selectedIndex < this._resultWidgets.length - 1) {
+        if (this._resultWidgets.length > 0 && this._selectedIndex < this._results.length - 1) {
             this._ignoreHover = true;
             this._setSelectedIndex(this._selectedIndex + 1);
         }
@@ -124,6 +134,15 @@ class GnomeLensResultsList extends St.ScrollView {
         return ['directory', 'folder', 'inode/directory'].includes(ext) || r.plugin_id === 'plugin:folder' || r.plugin_id === 'plugin:directory';
     }
 
+    _getGroup(r) {
+        let ext = this._getExt(r);
+        if (this._isFolderResult(r)) return 0;
+        if (r.plugin_id === 'plugin:app_launcher' || r.plugin_id === 'plugin:math') return 1;
+        if (r.plugin_id === 'plugin:email' || ext === 'eml') return 2;
+        if (r.metadata && r.metadata.shallow_index === 'true') return 4;
+        return 3;
+    }
+
     launchSelected() {
         if (this._selectedIndex >= 0 && this._selectedIndex < this._results.length) {
             let res = this._results[this._selectedIndex];
@@ -144,6 +163,10 @@ class GnomeLensResultsList extends St.ScrollView {
     }
 
     _setSelectedIndex(index) {
+        while (index >= this._renderedCount && this._renderedCount < this._results.length) {
+            this._renderNextChunk();
+        }
+        
         if (this._selectedIndex >= 0 && this._selectedIndex < this._resultWidgets.length) {
             this._resultWidgets[this._selectedIndex].remove_style_class_name('selected');
         }
@@ -284,6 +307,15 @@ class GnomeLensResultsList extends St.ScrollView {
         checkNext(0);
     }
 
+    _onScroll() {
+        let adj = this.vscroll ? this.vscroll.adjustment : this.vadjustment;
+        if (!adj) return;
+        // Fix: Use version-safe bounds verification to fire infinite chunk calculations smoothly
+        if (adj.value >= adj.upper - adj.page_size - 150) {
+            this._renderNextChunk();
+        }
+    }
+
     renderResults(resultsArray, activeFilter = 'All') {
         let oldSelectedId = null;
         if (this._selectedIndex >= 0 && this._selectedIndex < this._results.length) {
@@ -292,17 +324,14 @@ class GnomeLensResultsList extends St.ScrollView {
 
         this.clear();
         
-        let getGroup = (r) => {
-            if (this._isFolderResult(r)) return 0;
-            if (r.plugin_id === 'plugin:app_launcher' || r.plugin_id === 'plugin:math') return 1;
-            if (r.plugin_id === 'plugin:email' || this._getExt(r) === 'eml') return 2;
-            if (r.metadata && r.metadata.shallow_index === 'true') return 4;
-            return 3;
-        };
+        let sysTotalHits = 0;
+        if (resultsArray.length > 0 && resultsArray[0].metadata && resultsArray[0].metadata.sys_total_hits) {
+            sysTotalHits = parseInt(resultsArray[0].metadata.sys_total_hits, 10);
+        }
         
         let filteredArray = resultsArray.filter(res => {
             if (activeFilter === 'All') return true;
-            let group = getGroup(res);
+            let group = this._getGroup(res);
             if (activeFilter === 'Folders') return group === 0;
             if (activeFilter === 'Apps') return group === 1;
             if (activeFilter === 'Emails') return group === 2;
@@ -320,8 +349,6 @@ class GnomeLensResultsList extends St.ScrollView {
         let bestMatches = [];
         let rest = [];
 
-        // Check if this is an AI-filtered response (where all returned items explicitly matched an AI criteria)
-        // If so, we don't need a "Top Hits" section; categorization by type is better.
         let isAiFiltered = scoreSorted.length > 0 && scoreSorted.every(r => r.ai_matched === true);
 
         if (activeFilter === 'All' && scoreSorted.length > 0 && !isAiFiltered) {
@@ -334,8 +361,8 @@ class GnomeLensResultsList extends St.ScrollView {
                 let bMatch = b.ai_matched === true;
                 if (aMatch !== bMatch) return aMatch ? -1 : 1;
 
-                let groupA = getGroup(a);
-                let groupB = getGroup(b);
+                let groupA = this._getGroup(a);
+                let groupB = this._getGroup(b);
                 if (groupA !== groupB) return groupA - groupB;
                 
                 return (b.score || 0) - (a.score || 0);
@@ -347,8 +374,8 @@ class GnomeLensResultsList extends St.ScrollView {
                 let bMatch = b.ai_matched === true;
                 if (aMatch !== bMatch) return aMatch ? -1 : 1;
 
-                let groupA = getGroup(a);
-                let groupB = getGroup(b);
+                let groupA = this._getGroup(a);
+                let groupB = this._getGroup(b);
                 if (groupA !== groupB) return groupA - groupB;
                 
                 return (b.score || 0) - (a.score || 0);
@@ -356,28 +383,64 @@ class GnomeLensResultsList extends St.ScrollView {
         }
 
         this._results = [...bestMatches, ...rest];
+        
+        if (activeFilter === 'All') {
+            this._totalHits = Math.max(sysTotalHits, this._results.length);
+        } else {
+            this._totalHits = this._results.length;
+        }
 
-        let maxRender = this._results.length;
-        let currentGroup = -2; 
+        this._bestMatchesLength = bestMatches.length;
+        this._renderedCount = 0;
+        this._currentGroup = -2;
+        
+        if (!this._scrollConnected) {
+            let adj = this.vscroll ? this.vscroll.adjustment : this.vadjustment;
+            if (adj) {
+                // Fix: Hook property listener to 'notify::value' because St.Adjustment doesn't emit 'value-changed' natively in GNOME Shell
+                adj.connectObject('notify::value', this._onScroll.bind(this), this);
+                this._scrollConnected = true;
+            }
+        }
+
+        this._renderNextChunk();
+
+        if (this._results.length > 0) {
+            let newIndex = 0;
+            if (oldSelectedId) {
+                let found = this._results.findIndex(r => r.id === oldSelectedId);
+                if (found !== -1 && found < this._resultWidgets.length) {
+                    newIndex = found;
+                }
+            }
+            this._setSelectedIndex(newIndex);
+        }
+    }
+
+    _renderNextChunk() {
+        if (this._renderedCount >= this._results.length) return;
+        
+        let start = this._renderedCount;
+        let end = Math.min(start + this._chunkSize, this._results.length);
         let groupNames = ["Folders", "Applications & Tools", "Emails", "Indexed Documents", "Other Files"];
 
-        for (let i = 0; i < maxRender; i++) {
+        for (let i = start; i < end; i++) {
             let res = this._results[i];
             let ext = this._getExt(res);
             let isFolder = this._isFolderResult(res);
-            let group = getGroup(res);
+            let group = this._getGroup(res);
             let isEmail = res.plugin_id === 'plugin:email' || ext === 'eml';
             
-            let displayGroup = (i < bestMatches.length) ? -1 : group;
+            let displayGroup = (i < this._bestMatchesLength) ? -1 : group;
             
-            if (displayGroup !== currentGroup) {
+            if (displayGroup !== this._currentGroup) {
                 let headerText = displayGroup === -1 ? "Top Hits" : (groupNames[group] || "Other");
                 let header = new St.Label({
                     text: headerText,
                     style_class: 'lens-result-group-header'
                 });
                 this._resultsBox.add_child(header);
-                currentGroup = displayGroup;
+                this._currentGroup = displayGroup;
             }
 
             let itemBox = new St.BoxLayout({
@@ -719,22 +782,7 @@ class GnomeLensResultsList extends St.ScrollView {
             this._resultsBox.add_child(itemBox);
             this._resultWidgets.push(itemBox);
         }
-
-        if (this._results.length > 0) {
-            let newIndex = 0;
-            if (oldSelectedId) {
-                let found = this._results.findIndex(r => r.id === oldSelectedId);
-                if (found !== -1 && found < this._resultWidgets.length) {
-                    newIndex = found;
-                }
-            }
-            this._setSelectedIndex(newIndex);
-        }
-    }
-
-    destroy() {
-        this.clear();
-        this.disconnectObject(this);
-        super.destroy();
+        
+        this._renderedCount = end;
     }
 });

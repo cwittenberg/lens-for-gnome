@@ -560,7 +560,6 @@ impl VectorStore {
 
         let mut candidate_scores: Vec<(String, f32, Option<String>, Option<String>)> = cache_guard.iter()
             .filter(|(_, doc)| {
-                // If semantic search is running, do not drop files unless we have too many candidates
                 if is_dummy_vector && !fts_matches.contains_key(&doc.id) {
                     return false;
                 }
@@ -680,7 +679,9 @@ impl VectorStore {
 
         scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         
-        scored_candidates.truncate(100);
+        let total_hits = scored_candidates.len();
+        // REMOVED HARD-CAP LIMIT: We no longer truncate to 100 or 1000 records.
+        // We let all qualified results pass downstream so the UI scrolls smoothly over the complete dataset.
 
         if prioritize_folders {
             let mut top_folders = Vec::new();
@@ -697,7 +698,6 @@ impl VectorStore {
         }
 
         // ================== CRITICAL THREADING FIX ==================
-        // Extract required metadata from the cache BEFORE dropping the lock to prevent deadlocking.
         let mut doc_metadata_map = HashMap::new();
         for (id, _, _, _, _, _) in &scored_candidates {
             if let Some(doc) = cache_guard.get(id) {
@@ -705,8 +705,6 @@ impl VectorStore {
             }
         }
         
-        // We MUST drop the cache read lock here! If we hold cache_guard while acquiring conn.lock(),
-        // we cause a classic deadlock against insert_document() which acquires conn.lock() then cache.write().
         drop(cache_guard); 
         // ==========================================================
 
@@ -719,11 +717,15 @@ impl VectorStore {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            let id_list = scored_candidates.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            
+            // PERFORMANCE WIN: Only fetch complete text for the top 50 items to keep context window allocations small.
+            // Items past the 50 mark will use the FTS snippet or short header fallback during virtual rendering.
+            let top_candidates: Vec<_> = scored_candidates.iter().take(50).collect();
+            let id_list = top_candidates.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             let sql = format!("SELECT id, content_text FROM documents_fts WHERE id IN ({})", id_list);
             
             if let Ok(mut text_stmt) = conn.prepare(&sql) {
-                let params_vec: Vec<&dyn rusqlite::ToSql> = scored_candidates.iter().map(|(id, ..)| id as &dyn rusqlite::ToSql).collect();
+                let params_vec: Vec<&dyn rusqlite::ToSql> = top_candidates.iter().map(|(id, ..)| id as &dyn rusqlite::ToSql).collect();
                 if let Ok(mut rows) = text_stmt.query(rusqlite::params_from_iter(params_vec)) {
                     while let Ok(Some(row)) = rows.next() {
                         let id: String = row.get(0).unwrap_or_default();
@@ -742,9 +744,12 @@ impl VectorStore {
             }
 
             let parsed_filename = Path::new(&id).file_name().unwrap_or_default().to_string_lossy().to_string();
-            
-            // Read from the localized map instead of the cache_guard
             let mut metadata = doc_metadata_map.remove(&id).unwrap_or_default();
+
+            // Inject total uncapped metric into the first row element
+            if results.is_empty() {
+                metadata.insert("sys_total_hits".to_string(), total_hits.to_string());
+            }
 
             let full_text = full_texts.remove(&id).unwrap_or_default();
 
@@ -840,20 +845,16 @@ impl VectorStore {
         
         let cache_guard = self.cache.read().unwrap();
         
-        // 1. Attempt a live filesystem read to emulate Nautilus-like real-time browsing
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry_res in entries {
                 if let Ok(entry) = entry_res {
                     let file_name = entry.file_name().to_string_lossy().to_string();
-                    
-                    // Hide hidden files by default to emulate standard file manager behavior
                     if file_name.starts_with('.') {
                         continue;
                     }
 
                     let file_path = entry.path().to_string_lossy().to_string();
 
-                    // If indexed, leverage rich metadata from the database
                     if let Some(cached_doc) = cache_guard.get(&file_path) {
                         let is_dir = cached_doc.metadata.get("filetype").map(|s| s.as_str()) == Some("directory");
                         results.push(SearchResult {
@@ -872,7 +873,6 @@ impl VectorStore {
                             ai_reasoning: None,
                         });
                     } else {
-                        // Generate real-time standard info for non-indexed files
                         let file_type = entry.file_type().ok();
                         let is_dir = file_type.map(|ft| ft.is_dir()).unwrap_or(false);
                         
@@ -912,8 +912,6 @@ impl VectorStore {
                 }
             }
         } else {
-            // 2. Fallback to purely cache-based matching if directory cannot be read live 
-            // (e.g., permissions, or virtual paths)
             let dir_prefix_lower = dir_prefix.to_lowercase();
             let prefix_char_count = dir_prefix.chars().count();
 
