@@ -31,11 +31,24 @@ fn get_gsettings_bool(adapter: &RuntimeAdapter, key: &str) -> bool {
         .arg(key)
         .output()
     {
-        if !output.status.success() {
+        if output.status.success() {
+            return String::from_utf8_lossy(&output.stdout).trim() == "true";
+        } else {
             eprintln!("[GSettings Error] Failed to read {}: {}", key, String::from_utf8_lossy(&output.stderr).trim());
         }
-        return String::from_utf8_lossy(&output.stdout).trim() == "true";
     }
+    
+    // Fallback to dconf (Bypasses strictly confined Snap schema reading permissions via DBus)
+    if let Ok(output) = adapter.create_system_command("dconf")
+        .arg("read")
+        .arg(format!("/org/gnome/shell/extensions/lens-for-gnome/{}", key))
+        .output()
+    {
+        if output.status.success() {
+            return String::from_utf8_lossy(&output.stdout).trim() == "true";
+        }
+    }
+    
     false
 }
 
@@ -46,35 +59,72 @@ fn get_gsettings_int(adapter: &RuntimeAdapter, key: &str, default: usize) -> usi
         .arg(key)
         .output()
     {
-        if !output.status.success() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let parts: Vec<&str> = stdout.split_whitespace().collect();
+            if let Some(last) = parts.last() {
+                if let Ok(val) = last.parse::<usize>() {
+                    return val;
+                }
+            }
+        } else {
             eprintln!("[GSettings Error] Failed to read {}: {}", key, String::from_utf8_lossy(&output.stderr).trim());
         }
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let parts: Vec<&str> = stdout.split_whitespace().collect();
-        if let Some(last) = parts.last() {
-            if let Ok(val) = last.parse::<usize>() {
-                return val;
+    }
+    
+    // Fallback to dconf
+    if let Ok(output) = adapter.create_system_command("dconf")
+        .arg("read")
+        .arg(format!("/org/gnome/shell/extensions/lens-for-gnome/{}", key))
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let parts: Vec<&str> = stdout.split_whitespace().collect();
+            if let Some(last) = parts.last() {
+                if let Ok(val) = last.parse::<usize>() {
+                    return val;
+                }
             }
         }
     }
+    
     default
 }
 
 fn get_gsettings_array(adapter: &RuntimeAdapter, key: &str) -> Vec<String> {
+    let mut raw_output = String::new();
+    
     if let Ok(output) = adapter.build_gsettings_cmd()
         .arg("get")
         .arg("org.gnome.shell.extensions.lens-for-gnome")
         .arg(key)
         .output()
     {
-        if !output.status.success() {
+        if output.status.success() {
+            raw_output = String::from_utf8_lossy(&output.stdout).to_string();
+        } else {
             eprintln!("[GSettings Error] Failed to read {}: {}", key, String::from_utf8_lossy(&output.stderr).trim());
-            return Vec::new();
         }
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        println!("[Boot DEBUG] Raw gsettings output for {}: {:?}", key, stdout);
+    }
+
+    if raw_output.is_empty() {
+        // Fallback to dconf
+        if let Ok(output) = adapter.create_system_command("dconf")
+            .arg("read")
+            .arg(format!("/org/gnome/shell/extensions/lens-for-gnome/{}", key))
+            .output()
+        {
+            if output.status.success() {
+                raw_output = String::from_utf8_lossy(&output.stdout).to_string();
+            }
+        }
+    }
+
+    if !raw_output.is_empty() {
+        println!("[Boot DEBUG] Raw gsettings/dconf output for {}: {:?}", key, raw_output);
         
-        let cleaned = stdout
+        let cleaned = raw_output
             .replace("[", "")
             .replace("]", "")
             .replace("'", "")
@@ -88,9 +138,10 @@ fn get_gsettings_array(adapter: &RuntimeAdapter, key: &str) -> Vec<String> {
                 results.push(trimmed.to_string());
             }
         }
-        println!("[Boot DEBUG] Parsed gsettings array for {}: {:?}", key, results);
+        println!("[Boot DEBUG] Parsed array for {}: {:?}", key, results);
         return results;
     }
+    
     Vec::new()
 }
 
@@ -144,9 +195,19 @@ fn handle_client(mut stream: UnixStream, router: Arc<SystemRouter>) {
 }
 
 fn main() -> std::io::Result<()> {
+    // FIX: Force standard output to flush continuously.
+    // Rust block-buffers by default when piped (like to `tee` or systemd).
+    // This thread guarantees logs stream to your UI and journalctl in real-time.
+    thread::spawn(|| loop {
+        let _ = std::io::stdout().flush();
+        thread::sleep(std::time::Duration::from_millis(250));
+    });
+
     let args: Vec<String> = env::args().collect();
     let runtime_adapter = Arc::new(RuntimeAdapter::detect());
-    let home_dir = env::var("HOME").expect("HOME environment variable must be set");
+    
+    // Explicitly bypass snapd's HOME overwrite to map to the real host directories
+    let home_dir = env::var("SNAP_REAL_HOME").unwrap_or_else(|_| env::var("HOME").expect("HOME environment variable must be set"));
     
     let config_dir = runtime_adapter.config_dir().to_string_lossy().to_string();
     if !Path::new(&config_dir).exists() {
@@ -303,7 +364,7 @@ fn main() -> std::io::Result<()> {
         Box::new(MathPlugin),
         Box::new(EmailPlugin::new(Arc::clone(&vector_store))),
         Box::new(AppLauncherPlugin::new()),
-        Box::new(VectorSearchPlugin::new(Arc::clone(&vector_store))),
+        Box::new(VectorSearchPlugin::new(Arc::clone(&vector_store), &data_dir)),
     ];
 
     println!("Loading Lens for GNOME Plugins:");

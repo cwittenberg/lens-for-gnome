@@ -2,6 +2,7 @@ import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 import GLib from 'gi://GLib';
+import { runtime } from './runtime.js';
 
 class AIEngineManager {
     constructor(page) {
@@ -77,79 +78,18 @@ class AIEngineManager {
         let cancellable = new Gio.Cancellable();
         this._cancellables.push(cancellable);
 
-        let socketClient = new Gio.SocketClient();
-        let socketPath = GLib.get_home_dir() + '/.local/state/lens-for-gnome/lens_for_gnome.sock';
-        let address = Gio.UnixSocketAddress.new(socketPath);
-
-        socketClient.connect_async(address, cancellable, (client, res) => {
-            let connection, outputStream, inputStream;
-            try {
-                connection = client.connect_finish(res);
-                outputStream = connection.get_output_stream();
-                inputStream = new Gio.DataInputStream({ base_stream: connection.get_input_stream() });
-                inputStream.set_newline_type(Gio.DataStreamNewlineType.ANY);
-                
-                let payloadStr = JSON.stringify(payloadObj) + '\n';
-                
-                outputStream.write_all_async(payloadStr, GLib.PRIORITY_DEFAULT, cancellable, (stream, writeRes) => {
-                    try {
-                        stream.write_all_finish(writeRes);
-                        this._readLoop(inputStream, outputStream, cancellable, onMessage, connection);
-                    } catch (e) {
-                        this._cleanupConnection(inputStream, outputStream, connection);
-                    }
-                });
-            } catch (e) {
-                if (!cancellable.is_cancelled()) {
-                    this.hwStatusRow.set_title('Service Offline');
-                    this.hwStatusRow.set_subtitle('Start the background daemon in the Indexation tab to view AI settings.');
-                    this.spinner.stop();
-                    this.spinner.set_visible(false);
-                    this.opGroup.set_visible(false);
-                    this.modelGroup.set_description('Cannot fetch models while service is offline.');
-                }
+        let handleOffline = () => {
+            if (!cancellable.is_cancelled()) {
+                this.hwStatusRow.set_title('Service Offline');
+                this.hwStatusRow.set_subtitle('Start the background daemon in the Indexation tab to view AI settings.');
+                this.spinner.stop();
+                this.spinner.set_visible(false);
+                this.opGroup.set_visible(false);
+                this.modelGroup.set_description('Cannot fetch models while service is offline.');
             }
-        });
-    }
+        };
 
-    _readLoop(inputStream, outputStream, cancellable, onMessage, connection) {
-        if (cancellable.is_cancelled()) {
-            this._cleanupConnection(inputStream, outputStream, connection);
-            return;
-        }
-
-        inputStream.read_line_async(GLib.PRIORITY_DEFAULT, cancellable, (stream, res) => {
-            try {
-                let lineData = stream.read_line_finish_utf8(res);
-                if (lineData && lineData[0] !== null) {
-                    let text = lineData[0].trim();
-                    if (text.length > 0) {
-                        try {
-                            onMessage(JSON.parse(text));
-                        } catch (err) {
-                            console.warn('[Lens for GNOME] Invalid JSON in stream:', text);
-                        }
-                    }
-                    this._readLoop(inputStream, outputStream, cancellable, onMessage, connection);
-                } else {
-                    this._cleanupConnection(inputStream, outputStream, connection);
-                }
-            } catch (error) {
-                this._cleanupConnection(inputStream, outputStream, connection);
-            }
-        });
-    }
-
-    _cleanupConnection(inputStream, outputStream, connection) {
-        if (inputStream) {
-            inputStream.close_async(GLib.PRIORITY_DEFAULT, null, null);
-        }
-        if (outputStream) {
-            outputStream.close_async(GLib.PRIORITY_DEFAULT, null, null);
-        }
-        if (connection) {
-            connection.close_async(GLib.PRIORITY_DEFAULT, null, null);
-        }
+        runtime.sendPayload(payloadObj, cancellable, onMessage, handleOffline, handleOffline);
     }
 
     cancelActiveOperations() {
@@ -271,8 +211,6 @@ class AIEngineManager {
         let activeModelId = configData.active_model;
         let models = configData.models || {};
         
-        // Strip out unsupported Microsoft models from the backend list
-        // These models seriously do not work (!). TODO: add a note in the prefs app to inform the user of it
         for (let key in models) {
             let name = (models[key].name || '').toLowerCase();
             if (name.includes('microsoft') || key.includes('phi') || key.includes('microsoft')) {

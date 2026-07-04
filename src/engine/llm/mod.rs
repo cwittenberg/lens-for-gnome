@@ -9,6 +9,7 @@ pub mod strategy_script;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::Write;
+use std::thread;
 
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -38,27 +39,6 @@ pub struct LlmCore {
 }
 
 impl LlmCore {
-    pub fn new() -> Self {
-        println!("Initializing llama.cpp Backend...");
-        
-        let backend = LlamaBackend::init().expect("Failed to initialize C++ backend");
-        let (model_path, model_url, supports_cot) = ModelManager::get_active_model_details();
-        
-        ModelManager::ensure_model_available(&model_path, &model_url);
-
-        let n_gpu = HardwareManager::get_optimal_gpu_layers();
-        
-        println!("[LLM] Note: If 'token_embd.weight' is mapped to the CPU in the following logs, this is EXPECTED.");
-        println!("[LLM] The embedding lookup table stays in system RAM for fast O(1) lookups, while all compute layers offload to the GPU.");
-        
-        let model_params = LlamaModelParams::default().with_n_gpu_layers(n_gpu);
-        
-        let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
-            .unwrap_or_else(|_| panic!("Failed to load GGUF model from {}.", model_path));
-
-        Self { backend, model, supports_cot }
-    }
-
     pub fn generate_text(&self, strategy_name: &str, prompt: &str, max_tokens: usize, is_cancelled: Arc<AtomicBool>) -> String {
         println!("\n=======================================================================================");
         println!("[DEBUG] STRATEGY: [{}]", strategy_name.to_uppercase());
@@ -304,14 +284,74 @@ pub fn extract_relevant_window(text: &str, condition: &str, window_chars: usize)
 }
 
 pub struct LlmService {
-    engine: Arc<Mutex<LlmCore>>,
+    engine: Arc<Mutex<Option<LlmCore>>>,
+    pub boot_status: Arc<Mutex<String>>,
 }
 
 impl LlmService {
     pub fn new() -> Self {
-        Self {
-            engine: Arc::new(Mutex::new(LlmCore::new())),
-        }
+        let engine = Arc::new(Mutex::new(None));
+        let engine_clone = Arc::clone(&engine);
+        
+        // Track background progress dynamically for UI queries
+        let boot_status = Arc::new(Mutex::new("Initializing background routines...".to_string()));
+        let boot_status_clone = Arc::clone(&boot_status);
+
+        // Spawn non-blocking thread to allow instant boot initialization
+        thread::spawn(move || {
+            println!("[LLM] Starting asynchronous background loading sequence...");
+            let (model_path, model_url, supports_cot) = ModelManager::get_active_model_details();
+            
+            if let Ok(mut guard) = boot_status_clone.lock() {
+                *guard = "Checking local model cache...".to_string();
+            }
+
+            // Safe execution of any blocking model downloads/verifications outside of main thread.
+            // Passes the global status tracker so it can update the UI with percentage logs.
+            ModelManager::ensure_model_available(&model_path, &model_url, Some(Arc::clone(&boot_status_clone)));
+
+            let backend = match LlamaBackend::init() {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("[LLM Error] Failed to initialize backend context: {:?}", e);
+                    if let Ok(mut guard) = boot_status_clone.lock() {
+                        *guard = format!("Failed to initialize Llama backend: {:?}", e);
+                    }
+                    return;
+                }
+            };
+
+            let n_gpu = HardwareManager::get_optimal_gpu_layers();
+            let model_params = LlamaModelParams::default().with_n_gpu_layers(n_gpu);
+
+            if let Ok(mut guard) = boot_status_clone.lock() {
+                *guard = "Loading AI model into RAM/VRAM...".to_string();
+            }
+
+            match LlamaModel::load_from_file(&backend, &model_path, &model_params) {
+                Ok(model) => {
+                    let mut guard = engine_clone.lock().unwrap();
+                    *guard = Some(LlmCore { backend, model, supports_cot });
+                    
+                    if let Ok(mut status_guard) = boot_status_clone.lock() {
+                        *status_guard = "Ready".to_string();
+                    }
+                    println!("[LLM] Asynchronous background model loading complete. AI functionality activated!");
+                }
+                Err(e) => {
+                    eprintln!("[LLM Error] Failed to load model in background thread: {:?}", e);
+                    if let Ok(mut guard) = boot_status_clone.lock() {
+                        *guard = format!("Failed to load model file: {:?}", e);
+                    }
+                }
+            }
+        });
+
+        Self { engine, boot_status }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.engine.lock().unwrap().is_some()
     }
 
     pub fn switch_model<F>(&self, model_id: &str, send_chunk: &mut F, is_cancelled: Arc<AtomicBool>) -> Result<(), String> 
@@ -328,12 +368,17 @@ impl LlmService {
         let mut engine_guard = self.engine.lock().unwrap();
         let n_gpu = HardwareManager::get_optimal_gpu_layers();
         
-        let new_model = LlamaModel::load_from_file(&engine_guard.backend, &model_path, &LlamaModelParams::default().with_n_gpu_layers(n_gpu))
+        let backend = LlamaBackend::init().map_err(|_| "Failed to initialize LlamaBackend context")?;
+        
+        let new_model = LlamaModel::load_from_file(&backend, &model_path, &LlamaModelParams::default().with_n_gpu_layers(n_gpu))
             .map_err(|_| "Corrupted model file or failed to load into RAM")?;
         
         ModelManager::set_active_model(model_id)?;
-        engine_guard.model = new_model;
-        engine_guard.supports_cot = supports_cot;
+        *engine_guard = Some(LlmCore {
+            backend,
+            model: new_model,
+            supports_cot,
+        });
 
         Ok(())
     }
@@ -341,65 +386,102 @@ impl LlmService {
     pub fn determine_intent(&self, query: &str, explicit_synthesis: bool, enable_ai_filtering: bool, is_cancelled: Arc<AtomicBool>) -> LlmIntent {
         if explicit_synthesis { return LlmIntent::SynthesizeAnswer; }
 
-        let strategy = IntentStrategy;
-        let core = self.engine.lock().unwrap();
-        strategy.execute(&core, (query.to_string(), enable_ai_filtering), is_cancelled)
+        let core_guard = self.engine.lock().unwrap();
+        if let Some(ref core) = *core_guard {
+            let strategy = IntentStrategy;
+            strategy.execute(core, (query.to_string(), enable_ai_filtering), is_cancelled)
+        } else {
+            // Graceful safe fallback to direct keyword match when background initialization is running
+            LlmIntent::Skip
+        }
     }
 
     pub fn generate_synthesis(&self, query: &str, core_concept: &str, context_docs: Vec<SearchResult>, is_cancelled: Arc<AtomicBool>) -> serde_json::Value {
-        let strategy = SynthesisStrategy;
-        let core = self.engine.lock().unwrap();
-        strategy.execute(&core, (query.to_string(), core_concept.to_string(), context_docs), is_cancelled)
+        let core_guard = self.engine.lock().unwrap();
+        if let Some(ref core) = *core_guard {
+            let strategy = SynthesisStrategy;
+            strategy.execute(core, (query.to_string(), core_concept.to_string(), context_docs), is_cancelled)
+        } else {
+            let status_msg = self.boot_status.lock().unwrap().clone();
+            serde_json::json!({
+                "answer": format!("The AI search engine core is currently offline.\n\n**Status:** {}", status_msg),
+                "reasoning": "Model background download or initialization sequence in progress.",
+                "confidence_score": 0,
+                "confidence_justification": "AI core unavailable",
+                "cited_indices": []
+            })
+        }
     }
 
     pub fn compile_query_to_script(&self, query: &str, schema_keys: Vec<String>, is_cancelled: Arc<AtomicBool>) -> String {
-        let strategy = ScriptCompilerStrategy;
-        let core = self.engine.lock().unwrap();
-        strategy.execute(&core, (query.to_string(), schema_keys), is_cancelled)
+        let core_guard = self.engine.lock().unwrap();
+        if let Some(ref core) = *core_guard {
+            let strategy = ScriptCompilerStrategy;
+            strategy.execute(core, (query.to_string(), schema_keys), is_cancelled)
+        } else {
+            String::new()
+        }
     }
 
     pub fn fix_script_syntax(&self, query: &str, broken_script: &str, error_msg: &str, schema_keys: Vec<String>, is_cancelled: Arc<AtomicBool>) -> String {
-        let strategy = ScriptFixerStrategy;
-        let core = self.engine.lock().unwrap();
-        strategy.execute(&core, (query.to_string(), broken_script.to_string(), error_msg.to_string(), schema_keys), is_cancelled)
+        let core_guard = self.engine.lock().unwrap();
+        if let Some(ref core) = *core_guard {
+            let strategy = ScriptFixerStrategy;
+            strategy.execute(core, (query.to_string(), broken_script.to_string(), error_msg.to_string(), schema_keys), is_cancelled)
+        } else {
+            broken_script.to_string()
+        }
     }
 
     pub fn evaluate_script_logic(&self, query: &str, compiled_script: &str, schema_keys: Vec<String>, is_cancelled: Arc<AtomicBool>) -> String {
-        let strategy = ScriptEvaluatorStrategy;
-        let core = self.engine.lock().unwrap();
-        strategy.execute(&core, (query.to_string(), compiled_script.to_string(), schema_keys), is_cancelled)
+        let core_guard = self.engine.lock().unwrap();
+        if let Some(ref core) = *core_guard {
+            let strategy = ScriptEvaluatorStrategy;
+            strategy.execute(core, (query.to_string(), compiled_script.to_string(), schema_keys), is_cancelled)
+        } else {
+            "APPROVE".to_string()
+        }
     }
 
     pub fn apply_temporal_heuristics(&self, query: &mut SearchQuery, is_cancelled: Arc<AtomicBool>) {
-        let strategy = TemporalStrategy;
-        let core = self.engine.lock().unwrap();
-        let (min, max, clean) = strategy.execute(&core, query.raw_text.clone(), is_cancelled);
-        
-        if min.is_some() { query.min_timestamp = min; }
-        if max.is_some() { query.max_timestamp = max; }
-        if !clean.is_empty() { query.raw_text = clean; }
+        let core_guard = self.engine.lock().unwrap();
+        if let Some(ref core) = *core_guard {
+            let strategy = TemporalStrategy;
+            let (min, max, clean) = strategy.execute(core, query.raw_text.clone(), is_cancelled);
+            
+            if min.is_some() { query.min_timestamp = min; }
+            if max.is_some() { query.max_timestamp = max; }
+            if !clean.is_empty() { query.raw_text = clean; }
+        }
     }
 
     #[allow(dead_code)]
     pub fn apply_fast_filter(&self, condition: &str, candidates: Vec<SearchResult>, is_cancelled: Arc<AtomicBool>) -> Vec<SearchResult> {
-        let strategy = FastFilterStrategy;
-        let core = self.engine.lock().unwrap();
-        strategy.execute(&core, (condition.to_string(), candidates), is_cancelled)
+        let core_guard = self.engine.lock().unwrap();
+        if let Some(ref core) = *core_guard {
+            let strategy = FastFilterStrategy;
+            strategy.execute(core, (condition.to_string(), candidates), is_cancelled)
+        } else {
+            candidates
+        }
     }
 
     pub fn extract_core_concept(&self, query: &str, is_cancelled: Arc<AtomicBool>) -> String {
-        let core = self.engine.lock().unwrap();
-        let cot_bypass = if core.supports_cot { "<think>\n</think>\n" } else { "" };
-        
-        let prompt = format!(
-            "<|im_start|>system\nYou are a search engine keyword extractor. Extract ONLY the core factual subject nouns from the user's query. Ignore all conversational words, verbs, and question phrasing. Output ONLY space-separated keywords.<|im_end|>\n\
-            <|im_start|>user\n\
-            Query: \"{}\"\n\
-            <|im_end|>\n\
-            <|im_start|>assistant\n{}Keywords: ", query, cot_bypass
-        );
-        let response = core.generate_text("KEYWORD_EXTRACTION", &prompt, 150, is_cancelled);
-
-        response.replace("Keywords:", "").trim().to_string()
+        let core_guard = self.engine.lock().unwrap();
+        if let Some(ref core) = *core_guard {
+            let cot_bypass = if core.supports_cot { "<think>\n</think>\n" } else { "" };
+            
+            let prompt = format!(
+                "<|im_start|>system\nYou are a search engine keyword extractor. Extract ONLY the core factual subject nouns from the user's query. Ignore all conversational words, verbs, and question phrasing. Output ONLY space-separated keywords.<|im_end|>\n\
+                <|im_start|>user\n\
+                Query: \"{}\"\n\
+                <|im_end|>\n\
+                <|im_start|>assistant\n{}Keywords: ", query, cot_bypass
+            );
+            let response = core.generate_text("KEYWORD_EXTRACTION", &prompt, 150, is_cancelled);
+            response.replace("Keywords:", "").trim().to_string()
+        } else {
+            query.to_string()
+        }
     }
 }

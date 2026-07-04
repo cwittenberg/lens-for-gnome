@@ -1,99 +1,15 @@
+// gnome-extension/prefs_index.js
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import { runtime } from './runtime.js';
 
 function sendDaemonCommand(payloadObj, onMessage) {
-    let cancellable = new Gio.Cancellable();
-    let socketClient = new Gio.SocketClient();
-    let socketPath = GLib.get_home_dir() + '/.local/state/lens-for-gnome/lens_for_gnome.sock';
-    let address = Gio.UnixSocketAddress.new(socketPath);
-
-    const cleanupIPC = (conn, inStream, outStream) => {
-        if (inStream) inStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
-        if (outStream) outStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
-        if (conn) conn.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
-    };
-
-    socketClient.connect_async(address, cancellable, (client, res) => {
-        let connection, outputStream;
-        try {
-            connection = client.connect_finish(res);
-            outputStream = connection.get_output_stream();
-            let payloadStr = JSON.stringify(payloadObj) + '\n';
-            
-            outputStream.write_all_async(payloadStr, GLib.PRIORITY_DEFAULT, cancellable, (stream, writeRes) => {
-                try {
-                    stream.write_all_finish(writeRes);
-                    if (onMessage) {
-                        let inputStream = new Gio.DataInputStream({ base_stream: connection.get_input_stream() });
-                        inputStream.set_newline_type(Gio.DataStreamNewlineType.ANY);
-                        
-                        let readLoop = function() {
-                            inputStream.read_line_async(GLib.PRIORITY_DEFAULT, cancellable, (inStream, inRes) => {
-                                try {
-                                    let lineData = inStream.read_line_finish_utf8(inRes);
-                                    if (lineData && lineData[0] !== null) {
-                                        let text = lineData[0].trim();
-                                        if (text.length > 0) {
-                                            onMessage(JSON.parse(text));
-                                        }
-                                        readLoop();
-                                    } else {
-                                        cleanupIPC(connection, inputStream, outputStream);
-                                    }
-                                } catch (e) {
-                                    cleanupIPC(connection, inputStream, outputStream);
-                                }
-                            });
-                        };
-                        readLoop();
-                    } else {
-                        cleanupIPC(connection, null, outputStream);
-                    }
-                } catch (e) {
-                    cleanupIPC(connection, null, outputStream);
-                    console.warn("Failed to write command to daemon:", e);
-                }
-            });
-        } catch (e) {
-            if (onMessage) {
-                onMessage({ status: 'error', message: 'Offline' });
-            }
-        }
-    });
-}
-
-function getDaemonExecPath() {
-    let execPath = GLib.find_program_in_path('lens-for-gnome');
-    if (execPath) return execPath;
-
-    let home = GLib.get_home_dir();
-    
-    let standardPaths = [
-        home + '/.cargo/bin/lens-for-gnome',
-        home + '/.local/bin/lens-for-gnome',
-        home + '/Development/extensions/lens-for-gnome/target/release/lens-for-gnome',
-        home + '/Development/extensions/lens-for-gnome/target/debug/lens-for-gnome'
-    ];
-
-    for (let p of standardPaths) {
-        if (GLib.file_test(p, GLib.FileTest.EXISTS)) return p;
-    }
-
-    try {
-        let [success, stdout] = GLib.spawn_command_line_sync(
-            `sh -c "find $HOME/Development $HOME/Projects $HOME/dev $HOME/src $HOME/workspace -maxdepth 5 -type f -name lens-for-gnome -executable 2>/dev/null | head -n 1"`
-        );
-        if (success && stdout) {
-            let found = new TextDecoder().decode(stdout).trim();
-            if (found.length > 0) return found;
-        }
-    } catch (e) {
-        console.warn("[Lens for GNOME] Error dynamically searching for dev binary:", e);
-    }
-    
-    return 'lens-for-gnome';
+    runtime.sendPayload(payloadObj, null, onMessage, 
+        () => { if (onMessage) onMessage({ status: 'error', message: 'Offline' }); },
+        () => { if (onMessage) onMessage({ status: 'error', message: 'Offline' }); }
+    );
 }
 
 export function buildIndexPage(settings, window) {
@@ -131,14 +47,14 @@ export function buildIndexPage(settings, window) {
     statusRow.add_prefix(spinner);
 
     const startBtn = new Gtk.Button({
-        icon_name: 'media-playlist-start-symbolic',
+        icon_name: 'media-playback-start-symbolic',
         valign: Gtk.Align.CENTER,
         tooltip_text: 'Start Background Daemon'
     });
     startBtn.add_css_class('suggested-action');
 
     const stopBtn = new Gtk.Button({
-        icon_name: 'media-processor-stop-symbolic',
+        icon_name: 'media-playback-stop-symbolic',
         valign: Gtk.Align.CENTER,
         tooltip_text: 'Stop Background Daemon'
     });
@@ -181,6 +97,92 @@ export function buildIndexPage(settings, window) {
         });
     };
 
+    const launchDaemonNative = (onComplete, onError) => {
+        try {
+            let launcher = new Gio.SubprocessLauncher({
+                flags: Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
+            });
+            
+            launcher.set_environ(GLib.get_environ());
+            
+            if (runtime.isSnap && runtime.isSnap()) {
+                // The extension runs in the host, so we use systemctl --user to avoid sudo prompts
+                launcher.spawnv(['systemctl', '--user', 'start', 'snap.lens-for-gnome.daemon.service']);
+            } else {
+                let execPath = runtime.getDaemonPath();
+                launcher.spawnv([execPath]);
+            }
+            
+            if (onComplete) {
+                safeTimeout(1200, onComplete);
+            }
+        } catch (e) {
+            if (onError) {
+                onError(e);
+            }
+        }
+    };
+
+    const triggerDaemonRestart = () => {
+        if (isProcessing) return;
+        isProcessing = true;
+        startBtn.set_sensitive(false);
+        stopBtn.set_sensitive(false);
+        restartBtn.set_sensitive(false);
+        
+        statusRow.set_title('  Service Status: Restarting...');
+        statusRow.set_subtitle('Applying configuration and sweeping files...');
+        spinner.set_visible(true);
+        spinner.start();
+        
+        if (runtime.isSnap && runtime.isSnap()) {
+            // Send graceful IPC shutdown first
+            sendDaemonCommand({ action: 'shutdown' }, () => {});
+            
+            safeTimeout(1000, () => {
+                try {
+                    let launcher = new Gio.SubprocessLauncher({
+                        flags: Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
+                    });
+                    launcher.set_environ(GLib.get_environ());
+                    // Use systemctl restart so systemd handles the PID cycling cleanly
+                    launcher.spawnv(['systemctl', '--user', 'restart', 'snap.lens-for-gnome.daemon.service']);
+                    
+                    safeTimeout(1200, () => {
+                        isProcessing = false;
+                        updateServiceUI();
+                        loadStats();
+                    });
+                } catch (e) {
+                    isProcessing = false;
+                    spinner.stop();
+                    spinner.set_visible(false);
+                    statusRow.set_title('  Restart Failed');
+                    statusRow.set_subtitle(e.message);
+                    startBtn.set_sensitive(true);
+                }
+            });
+        } else {
+            // For host execution without guaranteed systemd hooks, send IPC shutdown first
+            sendDaemonCommand({ action: 'shutdown' }, () => {});
+            
+            safeTimeout(1500, () => {
+                launchDaemonNative(() => {
+                    isProcessing = false;
+                    updateServiceUI();
+                    loadStats();
+                }, (e) => {
+                    isProcessing = false;
+                    spinner.stop();
+                    spinner.set_visible(false);
+                    statusRow.set_title('  Launch Failed');
+                    statusRow.set_subtitle(e.message);
+                    startBtn.set_sensitive(true);
+                });
+            });
+        }
+    };
+
     startBtn.connect('clicked', () => {
         isProcessing = true;
         startBtn.set_sensitive(false);
@@ -192,27 +194,18 @@ export function buildIndexPage(settings, window) {
         spinner.set_visible(true);
         spinner.start();
 
-        try {
-            let execPath = getDaemonExecPath();
-            let proc = new Gio.Subprocess({
-                argv: [execPath],
-                flags: Gio.SubprocessFlags.NONE
-            });
-            proc.init(null);
-            
-            safeTimeout(1000, () => {
-                isProcessing = false;
-                updateServiceUI();
-                loadStats();
-            });
-        } catch (e) {
+        launchDaemonNative(() => {
+            isProcessing = false;
+            updateServiceUI();
+            loadStats();
+        }, (e) => {
             isProcessing = false;
             spinner.stop();
             spinner.set_visible(false);
             statusRow.set_title('  Launch Failed');
             statusRow.set_subtitle(e.message);
             startBtn.set_sensitive(true);
-        }
+        });
     });
 
     stopBtn.connect('clicked', () => {
@@ -228,6 +221,16 @@ export function buildIndexPage(settings, window) {
 
         sendDaemonCommand({ action: 'shutdown' }, () => {});
         
+        if (runtime.isSnap && runtime.isSnap()) {
+            try {
+                let launcher = new Gio.SubprocessLauncher({
+                    flags: Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
+                });
+                launcher.set_environ(GLib.get_environ());
+                launcher.spawnv(['systemctl', '--user', 'stop', 'snap.lens-for-gnome.daemon.service']);
+            } catch (e) {}
+        }
+        
         safeTimeout(1000, () => {
             isProcessing = false;
             updateServiceUI();
@@ -235,43 +238,7 @@ export function buildIndexPage(settings, window) {
     });
 
     restartBtn.connect('clicked', () => {
-        isProcessing = true;
-        startBtn.set_sensitive(false);
-        stopBtn.set_sensitive(false);
-        restartBtn.set_sensitive(false);
-        
-        statusRow.set_title('  Service Status: Restarting...');
-        statusRow.set_subtitle('Cycling daemon processes...');
-        spinner.set_visible(true);
-        spinner.start();
-
-        sendDaemonCommand({ action: 'shutdown' }, () => {});
-        
-        safeTimeout(1500, () => {
-            try {
-                let execPath = getDaemonExecPath();
-                let proc = new Gio.Subprocess({
-                    argv: [execPath],
-                    flags: Gio.SubprocessFlags.NONE
-                });
-                proc.init(null);
-            } catch (e) {
-                console.warn("Restart failed to launch binary:", e);
-                statusRow.set_title('  Launch Failed');
-                statusRow.set_subtitle(e.message);
-                spinner.stop();
-                spinner.set_visible(false);
-                isProcessing = false;
-                startBtn.set_sensitive(true);
-                return;
-            }
-
-            safeTimeout(1000, () => {
-                isProcessing = false;
-                updateServiceUI();
-                loadStats();
-            });
-        });
+        triggerDaemonRestart();
     });
 
     statusRow.add_suffix(restartBtn);
@@ -400,6 +367,7 @@ export function buildIndexPage(settings, window) {
                 let newPaths = settings.get_strv('index-paths').filter(x => x !== p);
                 settings.set_strv('index-paths', newPaths);
                 updatePaths();
+                triggerDaemonRestart();
             });
             row.add_suffix(delBtn);
             pathGroup.add(row);
@@ -432,6 +400,7 @@ export function buildIndexPage(settings, window) {
                         currentPaths.push(path);
                         settings.set_strv('index-paths', currentPaths);
                         updatePaths();
+                        triggerDaemonRestart();
                     }
                 }
             } catch (e) {
@@ -445,6 +414,7 @@ export function buildIndexPage(settings, window) {
 
     let fullSysChangedId = settings.connect('changed::index-full-system', () => {
         pathGroup.set_sensitive(!settings.get_boolean('index-full-system'));
+        triggerDaemonRestart();
     });
     pathGroup.set_sensitive(!settings.get_boolean('index-full-system'));
     
@@ -473,6 +443,7 @@ export function buildIndexPage(settings, window) {
                 let newItems = settings.get_strv('index-blacklist').filter(x => x !== item);
                 settings.set_strv('index-blacklist', newItems);
                 updateBlacklist();
+                triggerDaemonRestart();
             });
             row.add_suffix(delBtn);
             blacklistGroup.add(row);
@@ -492,6 +463,7 @@ export function buildIndexPage(settings, window) {
                 items.push(text);
                 settings.set_strv('index-blacklist', items);
                 updateBlacklist();
+                triggerDaemonRestart();
             }
             addBlacklistRow.set_text('');
         }
@@ -563,12 +535,14 @@ export function buildIndexPage(settings, window) {
         reindexBtn.set_sensitive(false);
         reindexBtn.set_label('Triggered...');
         
-        sendDaemonCommand({ action: 'reindex' }, null);
-        
-        safeTimeout(3000, () => {
-            reindexBtn.set_sensitive(true);
-            reindexBtn.set_label('Re-index');
-            loadStats(); 
+        sendDaemonCommand({ action: 'reindex' }, (data) => {
+            if (data && data.status === 'done') {
+                triggerDaemonRestart();
+                safeTimeout(3000, () => {
+                    reindexBtn.set_sensitive(true);
+                    reindexBtn.set_label('Re-index');
+                });
+            }
         });
     });
 

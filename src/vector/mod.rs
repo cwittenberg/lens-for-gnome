@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use crate::domain::SearchResult;
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 #[derive(Clone)]
 pub struct CachedDoc {
@@ -679,10 +680,6 @@ impl VectorStore {
 
         scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         
-        // RE-INTRODUCED UPPER THRESHOLD BATCH CAP FOR RAG CONTEXT PURITY:
-        // We allow infinite results when executing custom scripts, but for general vector searches or 
-        // synthesis prompts, capping the pipeline at 100 high-confidence entries prevents the LLM 
-        // context sliding window from choking on noise or system file garbage.
         scored_candidates.truncate(100);
 
         if prioritize_folders {
@@ -698,6 +695,20 @@ impl VectorStore {
             scored_candidates = top_folders;
             scored_candidates.extend(remaining);
         }
+
+        // ================== CRITICAL THREADING FIX ==================
+        // Extract required metadata from the cache BEFORE dropping the lock to prevent deadlocking.
+        let mut doc_metadata_map = HashMap::new();
+        for (id, _, _, _, _, _) in &scored_candidates {
+            if let Some(doc) = cache_guard.get(id) {
+                doc_metadata_map.insert(id.clone(), doc.metadata.clone());
+            }
+        }
+        
+        // We MUST drop the cache read lock here! If we hold cache_guard while acquiring conn.lock(),
+        // we cause a classic deadlock against insert_document() which acquires conn.lock() then cache.write().
+        drop(cache_guard); 
+        // ==========================================================
 
         let mut results = Vec::new();
         let mut ghosts_to_heal = Vec::new();
@@ -731,9 +742,9 @@ impl VectorStore {
             }
 
             let parsed_filename = Path::new(&id).file_name().unwrap_or_default().to_string_lossy().to_string();
-            let mut metadata: HashMap<String, String> = cache_guard.get(&id)
-                .map(|doc| doc.metadata.clone())
-                .unwrap_or_default();
+            
+            // Read from the localized map instead of the cache_guard
+            let mut metadata = doc_metadata_map.remove(&id).unwrap_or_default();
 
             let full_text = full_texts.remove(&id).unwrap_or_default();
 
@@ -796,8 +807,6 @@ impl VectorStore {
             });
         }
 
-        drop(cache_guard);
-
         if !ghosts_to_heal.is_empty() {
             let conn = match self.conn.lock() {
                 Ok(guard) => guard,
@@ -822,39 +831,116 @@ impl VectorStore {
     }
     
     pub fn browse_directory(&self, path: &str) -> Vec<SearchResult> {
-        let cache_guard = self.cache.read().unwrap();
         let mut results = Vec::new();
         
         let mut dir_prefix = path.to_string();
         if !dir_prefix.ends_with('/') {
             dir_prefix.push('/');
         }
-        let dir_prefix_lower = dir_prefix.to_lowercase();
-        let prefix_char_count = dir_prefix.chars().count();
-
-        for doc in cache_guard.values() {
-            let doc_id_lower = doc.id.to_lowercase();
-            if doc_id_lower.starts_with(&dir_prefix_lower) && doc_id_lower != dir_prefix_lower {
-                let remainder: String = doc.id.chars().skip(prefix_char_count).collect();
-                if !remainder.is_empty() && !remainder.contains('/') {
-                    let parsed_filename = Path::new(&doc.id).file_name().unwrap_or_default().to_string_lossy().to_string();
-                    let is_dir = doc.metadata.get("filetype").map(|s| s.as_str()) == Some("directory");
+        
+        let cache_guard = self.cache.read().unwrap();
+        
+        // 1. Attempt a live filesystem read to emulate Nautilus-like real-time browsing
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry_res in entries {
+                if let Ok(entry) = entry_res {
+                    let file_name = entry.file_name().to_string_lossy().to_string();
                     
-                    results.push(SearchResult {
-                        id: doc.id.clone(),
-                        title: parsed_filename.clone(),
-                        snippet: if is_dir { "Directory".to_string() } else { "File".to_string() },
-                        plugin_id: if is_dir { "plugin:directory".to_string() } else { "plugin:vector_db".to_string() },
-                        score: if is_dir { 1.0 } else { 0.5 },
-                        filename: Some(parsed_filename),
-                        filepath: Some(doc.id.clone()),
-                        metadata: doc.metadata.clone(),
-                        created_at: Some(doc.modified_at),
-                        indexed_at: None,
-                        full_context: None,
-                        ai_matched: None,
-                        ai_reasoning: None,
-                    });
+                    // Hide hidden files by default to emulate standard file manager behavior
+                    if file_name.starts_with('.') {
+                        continue;
+                    }
+
+                    let file_path = entry.path().to_string_lossy().to_string();
+
+                    // If indexed, leverage rich metadata from the database
+                    if let Some(cached_doc) = cache_guard.get(&file_path) {
+                        let is_dir = cached_doc.metadata.get("filetype").map(|s| s.as_str()) == Some("directory");
+                        results.push(SearchResult {
+                            id: cached_doc.id.clone(),
+                            title: file_name.clone(),
+                            snippet: if is_dir { "Directory".to_string() } else { "File".to_string() },
+                            plugin_id: if is_dir { "plugin:directory".to_string() } else { "plugin:vector_db".to_string() },
+                            score: if is_dir { 1.0 } else { 0.5 },
+                            filename: Some(file_name),
+                            filepath: Some(cached_doc.id.clone()),
+                            metadata: cached_doc.metadata.clone(),
+                            created_at: Some(cached_doc.modified_at),
+                            indexed_at: None,
+                            full_context: None,
+                            ai_matched: None,
+                            ai_reasoning: None,
+                        });
+                    } else {
+                        // Generate real-time standard info for non-indexed files
+                        let file_type = entry.file_type().ok();
+                        let is_dir = file_type.map(|ft| ft.is_dir()).unwrap_or(false);
+                        
+                        let mut metadata = HashMap::new();
+                        let mut created_at = None;
+                        
+                        if let Ok(meta) = entry.metadata() {
+                            if let Ok(modified) = meta.modified().or_else(|_| meta.created()) {
+                                if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                                    created_at = Some(duration.as_secs());
+                                }
+                            }
+                        }
+
+                        if is_dir {
+                            metadata.insert("filetype".to_string(), "directory".to_string());
+                        } else if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
+                            metadata.insert("filetype".to_string(), ext.to_lowercase());
+                        }
+                        
+                        results.push(SearchResult {
+                            id: file_path.clone(),
+                            title: file_name.clone(),
+                            snippet: if is_dir { "Directory".to_string() } else { "File".to_string() },
+                            plugin_id: if is_dir { "plugin:directory".to_string() } else { "plugin:vector_db".to_string() },
+                            score: if is_dir { 1.0 } else { 0.5 },
+                            filename: Some(file_name),
+                            filepath: Some(file_path),
+                            metadata,
+                            created_at,
+                            indexed_at: None,
+                            full_context: None,
+                            ai_matched: None,
+                            ai_reasoning: None,
+                        });
+                    }
+                }
+            }
+        } else {
+            // 2. Fallback to purely cache-based matching if directory cannot be read live 
+            // (e.g., permissions, or virtual paths)
+            let dir_prefix_lower = dir_prefix.to_lowercase();
+            let prefix_char_count = dir_prefix.chars().count();
+
+            for doc in cache_guard.values() {
+                let doc_id_lower = doc.id.to_lowercase();
+                if doc_id_lower.starts_with(&dir_prefix_lower) && doc_id_lower != dir_prefix_lower {
+                    let remainder: String = doc.id.chars().skip(prefix_char_count).collect();
+                    if !remainder.is_empty() && !remainder.contains('/') {
+                        let parsed_filename = Path::new(&doc.id).file_name().unwrap_or_default().to_string_lossy().to_string();
+                        let is_dir = doc.metadata.get("filetype").map(|s| s.as_str()) == Some("directory");
+                        
+                        results.push(SearchResult {
+                            id: doc.id.clone(),
+                            title: parsed_filename.clone(),
+                            snippet: if is_dir { "Directory".to_string() } else { "File".to_string() },
+                            plugin_id: if is_dir { "plugin:directory".to_string() } else { "plugin:vector_db".to_string() },
+                            score: if is_dir { 1.0 } else { 0.5 },
+                            filename: Some(parsed_filename),
+                            filepath: Some(doc.id.clone()),
+                            metadata: doc.metadata.clone(),
+                            created_at: Some(doc.modified_at),
+                            indexed_at: None,
+                            full_context: None,
+                            ai_matched: None,
+                            ai_reasoning: None,
+                        });
+                    }
                 }
             }
         }

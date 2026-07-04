@@ -2,16 +2,39 @@
   "spec_version": "2026-04-02",
   "summary": {
     "input_path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip",
-    "finding_count": 0,
-    "severity_counts": {},
-    "status": "clean"
+    "finding_count": 1,
+    "severity_counts": {
+      "manual_review": 1
+    },
+    "status": "issues_found"
   },
-  "findings": [],
+  "findings": [
+    {
+      "rule_id": "EGO-A-005",
+      "title": "extensions should not access the clipboard directly",
+      "severity": "manual_review",
+      "message": "Direct clipboard access via `St.Clipboard.get_default()` requires reviewer scrutiny.",
+      "evidence": [
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip:extension.js",
+          "line": 57,
+          "snippet": "St.Clipboard.get_default()"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip:extension.js",
+          "line": 101,
+          "snippet": "St.Clipboard.get_default()"
+        }
+      ],
+      "source_url": "https://gjs.guide/extensions/review-guidelines/review-guidelines.html#clipboard-access-must-be-declared",
+      "source_section": "Review Guidelines"
+    }
+  ],
   "artifacts": {
     "root": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip",
     "metadata_path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip:metadata.json",
-    "js_file_count": 18,
-    "file_count": 31,
+    "js_file_count": 19,
+    "file_count": 32,
     "limits": {
       "max_files": 5000,
       "max_file_size_bytes": 10485760,
@@ -21,11 +44,6 @@
       "max_zip_compression_ratio": 1000
     },
     "target_versions": [
-      45,
-      46,
-      47,
-      48,
-      49,
       50
     ]
   }

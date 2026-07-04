@@ -10,39 +10,72 @@ use gtk::gdk;
 use std::process::Command;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::io::{Write, BufRead, BufReader};
+use std::os::unix::net::UnixStream;
+
+fn is_snap_env() -> bool {
+    std::env::var("SNAP").is_ok()
+}
 
 fn get_logs() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let snap_log_path = format!("{}/.local/state/lens-for-gnome/daemon.log", home);
+
+    if is_snap_env() {
+        if let Ok(content) = std::fs::read_to_string(&snap_log_path) {
+            // CRITICAL FIX: Strip null bytes to prevent GTK `g_utf8_validate` assertions from crashing the manager
+            let sanitized = content.replace('\0', "");
+            if !sanitized.trim().is_empty() {
+                return sanitized;
+            }
+        }
+        return "No logs found. Start the engine to generate initialization logs.".to_string();
+    }
+
     // 1. Attempt to pull logs gracefully from the systemd journal framework first
     if let Ok(output) = Command::new("journalctl")
         .args(&["--user", "-u", "lens-for-gnome.service", "-n", "1000", "--no-pager"])
         .output() 
     {
-        let logs = String::from_utf8_lossy(&output.stdout).to_string();
+        let logs = String::from_utf8_lossy(&output.stdout).replace('\0', "");
         if !logs.trim().is_empty() && !logs.contains("No entries") {
             return logs;
         }
     }
     
     // 2. Fallback to the raw manual daemon log for developer execution modes
-    let home = std::env::var("HOME").unwrap_or_default();
-    let log_path = format!("{}/.local/state/lens-for-gnome/daemon.log", home);
-    if let Ok(content) = std::fs::read_to_string(&log_path) {
-        return content;
+    if let Ok(content) = std::fs::read_to_string(&snap_log_path) {
+        return content.replace('\0', "");
     }
     
     "No logs found. Start the engine to generate initialization logs.".to_string()
 }
 
 fn check_status() -> (bool, bool) {
-    // Check if the service is currently running
-    let is_active = if let Ok(output) = Command::new("systemctl")
-        .args(&["--user", "is-active", "lens-for-gnome.service"])
-        .output() 
-    {
-        String::from_utf8_lossy(&output.stdout).trim() == "active"
+    let home = std::env::var("HOME").unwrap_or_default();
+    let socket_path = format!("{}/.local/state/lens-for-gnome/lens_for_gnome.sock", home);
+
+    // Confinement-compliant socket health check
+    let is_active = if let Ok(mut stream) = UnixStream::connect(&socket_path) {
+        let payload = "{\"action\": \"ping\"}\n";
+        if stream.write_all(payload.as_bytes()).is_ok() {
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_ok() {
+                line.contains("pong")
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     } else {
         false
     };
+
+    if is_snap_env() {
+        return (is_active, true);
+    }
 
     // Check if the service is enabled to launch automatically at login/boot
     let is_enabled = if let Ok(output) = Command::new("systemctl")
@@ -58,18 +91,63 @@ fn check_status() -> (bool, bool) {
 }
 
 fn start_daemon() {
+    if is_snap_env() {
+        // Snap services manage themselves. Since manager is contained inside the snap,
+        // we use snapctl to command snapd to launch the daemon correctly.
+        if Command::new("snapctl").args(&["start", "lens-for-gnome.daemon"]).spawn().is_err() {
+            // Fallback to direct binary execution if snapctl fails
+            let home = std::env::var("HOME").unwrap_or_default();
+            let state_dir = format!("{}/.local/state/lens-for-gnome", home);
+            let _ = std::fs::create_dir_all(&state_dir);
+            if let Ok(log_file) = std::fs::File::create(format!("{}/daemon.log", state_dir)) {
+                let _ = Command::new("lens-for-gnome")
+                    .stdout(log_file.try_clone().unwrap())
+                    .stderr(log_file)
+                    .spawn();
+            }
+        }
+        return;
+    }
     let _ = Command::new("systemctl").args(&["--user", "start", "lens-for-gnome.service"]).spawn();
 }
 
 fn stop_daemon() {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let socket_path = format!("{}/.local/state/lens-for-gnome/lens_for_gnome.sock", home);
+
+    if is_snap_env() {
+        // Confinement-compliant graceful shutdown via secure IPC routing channel
+        if let Ok(mut stream) = UnixStream::connect(&socket_path) {
+            let payload = "{\"action\": \"shutdown\"}\n";
+            let _ = stream.write_all(payload.as_bytes());
+        }
+        // Also issue a snapctl stop to ensure the service manager marks it stopped natively
+        let _ = Command::new("snapctl").args(&["stop", "lens-for-gnome.daemon"]).spawn();
+        return;
+    }
     let _ = Command::new("systemctl").args(&["--user", "stop", "lens-for-gnome.service"]).spawn();
 }
 
 fn restart_daemon() {
+    if is_snap_env() {
+        stop_daemon();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        start_daemon();
+        return;
+    }
     let _ = Command::new("systemctl").args(&["--user", "restart", "lens-for-gnome.service"]).spawn();
 }
 
 fn toggle_autostart(enable: bool) {
+    if is_snap_env() {
+        // In Snap, autostart is managed via snap daemon configurations.
+        if enable {
+            let _ = Command::new("snapctl").args(&["start", "--enable", "lens-for-gnome.daemon"]).spawn();
+        } else {
+            let _ = Command::new("snapctl").args(&["stop", "--disable", "lens-for-gnome.daemon"]).spawn();
+        }
+        return;
+    }
     if enable {
         let _ = Command::new("systemctl").args(&["--user", "enable", "lens-for-gnome.service"]).spawn();
     } else {
@@ -88,9 +166,13 @@ fn update_icon_button(btn: &Button, icon_name: &str, label_text: &str) {
 }
 
 fn ensure_desktop_integration() {
+    if is_snap_env() {
+        return;
+    }
+    
     let home = std::env::var("HOME").unwrap_or_default();
     let app_dir = format!("{}/.local/share/applications", home);
-    let desktop_path = format!("{}/org.gnome.Lens.desktop", app_dir);
+    let desktop_path = format!("{}/lens-for-gnome.desktop", app_dir);
     
     let Ok(current_exe) = std::env::current_exe() else { return };
     let Ok(current_dir) = std::env::current_dir() else { return };
@@ -137,7 +219,7 @@ fn build_ui(app: &Application) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Lens for GNOME")
-        .icon_name("org.gnome.Lens")
+        .icon_name("lens-for-gnome")
         .default_width(1050)
         .default_height(650)
         .build();
@@ -353,16 +435,19 @@ fn build_ui(app: &Application) {
 fn main() -> glib::ExitCode {
     ensure_desktop_integration();
 
+    // GTK enforces that Application IDs are valid DBus names (requiring at least one '.' separator).
+    // Using "lens-for-gnome" directly would cause a runtime panic. 
+    // Setting NON_UNIQUE prevents strict confined snaps from tripping AppArmor dbus_method_call blocks.
     let app = Application::builder()
-        .application_id("org.gnome.Lens")
+        .application_id("io.github.cwittenberg.lens-for-gnome")
+        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
     // Hook global GTK initialization calls (like default icons) to the startup signal
     app.connect_startup(|_| {
-        gtk::Window::set_default_icon_name("org.gnome.Lens");
+        gtk::Window::set_default_icon_name("lens-for-gnome");
     });
 
     app.connect_activate(build_ui);
     app.run()
 }
-

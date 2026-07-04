@@ -57,10 +57,54 @@ if [ "$(uname)" == "Darwin" ]; then
     fi
 # 2. Detect Linux Hardware
 elif [ "$(uname)" == "Linux" ]; then
+    # Check for NVIDIA GPU
     if command -v nvidia-smi &> /dev/null && nvidia-smi -L &> /dev/null; then
-        export LLAMA_CUDA=1
-        BACKEND_NAME="CUDA_V2"
-        CARGO_FEATURES="--features llama-cpp-2/cuda"
+        if command -v nvcc &> /dev/null; then
+            export LLAMA_CUDA=1
+            export CMAKE_CUDA_ARCHITECTURES="native"
+            export CUDAFLAGS="-arch=native"
+            BACKEND_NAME="CUDA_V2"
+            CARGO_FEATURES="--features llama-cpp-2/cuda"
+        else
+            echo "-> NVIDIA GPU detected, but 'nvcc' (CUDA Toolkit) is missing."
+            read -p "   Would you like to install the CUDA Toolkit now? [y/N]: " install_nvcc_choice
+            
+            if [[ "$install_nvcc_choice" =~ ^[Yy]$ ]]; then
+                echo "   Attempting to install CUDA Toolkit..."
+                if command -v apt-get &> /dev/null; then
+                    sudo apt-get update && sudo apt-get install -y nvidia-cuda-toolkit
+                elif command -v dnf &> /dev/null; then
+                    # Fedora/RHEL often use nvidia-cuda-toolkit or cuda-compiler
+                    sudo dnf install -y cuda-toolkit || sudo dnf install -y nvidia-cuda-toolkit
+                elif command -v pacman &> /dev/null; then
+                    sudo pacman -Syu --needed --noconfirm cuda
+                elif command -v zypper &> /dev/null; then
+                    sudo zypper install -y cuda-toolkit
+                else
+                    echo "   Unsupported package manager. Cannot auto-install."
+                fi
+                
+                # Wipe CMake cache to guarantee the fresh nvcc compiler is discovered
+                rm -rf target/release/build/llama-cpp* target/debug/build/llama-cpp*
+            fi
+
+            # Re-evaluate after potential installation attempt
+            if command -v nvcc &> /dev/null; then
+                echo "-> CUDA Toolkit acquired successfully. Using CUDA backend."
+                export LLAMA_CUDA=1
+                export CMAKE_CUDA_ARCHITECTURES="native"
+                export CUDAFLAGS="-arch=native"
+                BACKEND_NAME="CUDA_V2"
+                CARGO_FEATURES="--features llama-cpp-2/cuda"
+            else
+                echo "-> Proceeding without nvcc. Falling back to Vulkan (NVIDIA)..."
+                export LLAMA_VULKAN=1
+                export GGML_VULKAN=1
+                export CMAKE_ARGS="-DGGML_VULKAN=1"
+                BACKEND_NAME="VULKAN_NVIDIA_V2"
+                CARGO_FEATURES="--features llama-cpp-2/vulkan"
+            fi
+        fi
     elif command -v lspci &> /dev/null; then
         if lspci | grep -iE 'vga|display|3d|npu' | grep -i 'amd\|radeon' &> /dev/null; then
             export LLAMA_VULKAN=1
@@ -96,6 +140,10 @@ else
 fi
 
 echo "-> Building Lens for GNOME (Optimized Release Mode)..."
+
+# Explicitly push standard search flags directly into rustc so the linker finds the libraries
+export RUSTFLAGS="-L /usr/local/cuda/lib64 -L /usr/lib/x86_64-linux-gnu -L /opt/cuda/lib64 $RUSTFLAGS"
+
 cargo build --release $CARGO_FEATURES
 
 echo "-> Stopping any existing instances..."

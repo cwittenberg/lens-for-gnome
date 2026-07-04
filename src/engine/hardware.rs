@@ -103,7 +103,42 @@ impl HardwareManager {
             }
         }
 
-        // 5. Default fallback to standard CPU Processing
+        // 5. Check Linux Compute Accelerators subsystem (Kernel 6.3+ NPUs)
+        if std::path::Path::new("/dev/accel").exists() {
+            if let Ok(entries) = std::fs::read_dir("/dev/accel") {
+                for entry in entries.flatten() {
+                    let file_name = entry.file_name().to_string_lossy().to_string();
+                    if file_name.starts_with("accel") {
+                        return HardwareStatus {
+                            acceleration_type: "NPU".to_string(),
+                            device_name: "Linux Compute Accelerator".to_string(),
+                            api: "Vulkan / OpenVINO".to_string(),
+                            is_hardware_dedicated: true,
+                        };
+                    }
+                }
+            }
+        }
+
+        // 6. Generic Vulkan / DRI fallback (Crucial for Snaps/Flatpaks where lspci is blocked)
+        if std::path::Path::new("/dev/dri").exists() {
+            if let Ok(entries) = std::fs::read_dir("/dev/dri") {
+                for entry in entries.flatten() {
+                    let file_name = entry.file_name().to_string_lossy().to_string();
+                    // Detect standard render nodes (e.g., renderD128)
+                    if file_name.starts_with("renderD") {
+                        return HardwareStatus {
+                            acceleration_type: "GPU/TPU".to_string(),
+                            device_name: "Hardware Accelerator (Vulkan/DRI)".to_string(),
+                            api: "Vulkan".to_string(),
+                            is_hardware_dedicated: true,
+                        };
+                    }
+                }
+            }
+        }
+
+        // 7. Default fallback to standard CPU Processing
         HardwareStatus {
             acceleration_type: "CPU".to_string(),
             device_name: "Standard Processor".to_string(),

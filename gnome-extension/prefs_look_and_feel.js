@@ -2,7 +2,52 @@ import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
 import Gdk from 'gi://Gdk';
-import { checkDependencies, showDependencyDialog } from './prefs_dependencies.js';
+import GLib from 'gi://GLib';
+import { checkDependencies, getDistributionInstructions } from './dependencies.js';
+
+function showDependencyDialog(parentWindow) {
+    let title = "Missing Multimedia Dependencies";
+    
+    let scrollView = new Gtk.ScrolledWindow({
+        min_content_height: 150,
+        max_content_height: 400,
+        propagate_natural_height: true
+    });
+
+    let distroInfo = getDistributionInstructions();
+    let pangoBody = `The media preview functionality requires ffmpeg, GStreamer, and Cogl bindings to render video. Please install them for your distribution, then <b>restart GNOME Shell</b>.\n\n<b>${distroInfo.name}</b>\n<tt>${distroInfo.cmd}</tt>`;
+
+    let label = new Gtk.Label({
+        label: pangoBody,
+        use_markup: true,
+        wrap: true,
+        selectable: true,
+        xalign: 0,
+        margin_top: 12,
+        margin_bottom: 12,
+        margin_start: 12,
+        margin_end: 12
+    });
+
+    scrollView.set_child(label);
+
+    if (Adw.AlertDialog) {
+        let dialog = new Adw.AlertDialog({
+            heading: title,
+            extra_child: scrollView
+        });
+        dialog.add_response('ok', 'Got it');
+        dialog.choose(parentWindow, null, () => {});
+    } else if (Adw.MessageDialog) {
+        let dialog = new Adw.MessageDialog({
+            heading: title,
+            extra_child: scrollView,
+            transient_for: parentWindow
+        });
+        dialog.add_response('ok', 'Got it');
+        dialog.present();
+    }
+}
 
 export function buildLookAndFeelPage(settings, window, extensionPrefs) {
     const page = new Adw.PreferencesPage({
@@ -175,7 +220,6 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
                     themeRow.set_subtitle(path);
                 }
             } catch (e) {
-                // Ignore cancellation
             }
         });
     });

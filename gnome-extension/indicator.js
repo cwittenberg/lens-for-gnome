@@ -5,6 +5,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import { runtime } from './runtime.js';
 
 export const GnomeLensIndicator = GObject.registerClass(
     class GnomeLensIndicator extends PanelMenu.Button {
@@ -14,7 +15,6 @@ export const GnomeLensIndicator = GObject.registerClass(
             this._extension = extension;
             this._settings = settings;
 
-            // Resolve the path to logo.svg within the extension directory bundle
             let logoFile = this._extension.dir.get_child('logo.svg');
             let icon;
 
@@ -26,7 +26,6 @@ export const GnomeLensIndicator = GObject.registerClass(
                     icon_size: 16
                 });
             } else {
-                // Fallback icon in case the SVG asset fails to resolve
                 icon = new St.Icon({
                     icon_name: 'system-search-symbolic',
                     style_class: 'system-status-icon'
@@ -78,16 +77,11 @@ export const GnomeLensIndicator = GObject.registerClass(
         }
 
         _checkServiceStatus() {
-            let socketClient = new Gio.SocketClient();
-            let socketPath = GLib.get_home_dir() + '/.local/state/lens-for-gnome/lens_for_gnome.sock';
-            let address = Gio.UnixSocketAddress.new(socketPath);
-
-            socketClient.connect_async(address, null, (client, res) => {
-                try {
-                    let conn = client.connect_finish(res);
-                    conn.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+            runtime.connectAsync(null, (connection, error) => {
+                if (connection) {
+                    connection.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
                     this._statusItem.label.set_text('🟢 Service: Online');
-                } catch (e) {
+                } else {
                     this._statusItem.label.set_text('🔴 Service: Offline');
                 }
             });

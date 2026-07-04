@@ -2,71 +2,19 @@ import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import { runtime } from './runtime.js';
 
 function sendDaemonCommand(payloadObj, onMessage) {
-    let cancellable = new Gio.Cancellable();
-    let socketClient = new Gio.SocketClient();
-    let socketPath = GLib.get_home_dir() + '/.local/state/lens-for-gnome/lens_for_gnome.sock';
-    let address = Gio.UnixSocketAddress.new(socketPath);
-
-    const cleanupIPC = (conn, inStream, outStream) => {
-        if (inStream) inStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
-        if (outStream) outStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
-        if (conn) conn.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
-    };
-
-    socketClient.connect_async(address, cancellable, (client, res) => {
-        let connection, outputStream;
-        try {
-            connection = client.connect_finish(res);
-            outputStream = connection.get_output_stream();
-            let payloadStr = JSON.stringify(payloadObj) + '\n';
-            
-            outputStream.write_all_async(payloadStr, GLib.PRIORITY_DEFAULT, cancellable, (stream, writeRes) => {
-                try {
-                    stream.write_all_finish(writeRes);
-                    if (onMessage) {
-                        let inputStream = new Gio.DataInputStream({ base_stream: connection.get_input_stream() });
-                        inputStream.set_newline_type(Gio.DataStreamNewlineType.ANY);
-                        
-                        let readLoop = function() {
-                            inputStream.read_line_async(GLib.PRIORITY_DEFAULT, cancellable, (inStream, inRes) => {
-                                try {
-                                    let lineData = inStream.read_line_finish_utf8(inRes);
-                                    if (lineData && lineData[0] !== null) {
-                                        let text = lineData[0].trim();
-                                        if (text.length > 0) {
-                                            onMessage(JSON.parse(text));
-                                        }
-                                        readLoop();
-                                    } else {
-                                        cleanupIPC(connection, inputStream, outputStream);
-                                    }
-                                } catch (e) {
-                                    cleanupIPC(connection, inputStream, outputStream);
-                                }
-                            });
-                        };
-                        readLoop();
-                    } else {
-                        cleanupIPC(connection, null, outputStream);
-                    }
-                } catch (e) {
-                    cleanupIPC(connection, null, outputStream);
-                }
-            });
-        } catch (e) {
-            if (onMessage) {
-                onMessage({ status: 'error', message: 'Offline' });
-            }
-        }
-    });
+    runtime.sendPayload(payloadObj, null, onMessage, 
+        () => { if (onMessage) onMessage({ status: 'error', message: 'Offline' }); },
+        () => { if (onMessage) onMessage({ status: 'error', message: 'Offline' }); }
+    );
 }
 
 class MailConfigManager {
     constructor(page) {
         this.page = page;
-        this.configPath = GLib.get_home_dir() + '/.config/lens-for-gnome/gmail.json';
+        this.configPath = runtime.getConfigPath('gmail.json');
         this.pollId = null;
         this._timeoutIds = [];
         this.buildUI();

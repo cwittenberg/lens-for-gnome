@@ -8,3 +8,12 @@ llm.txt
 logs.txt
 .flatpak-builder
 build-dir
+dist
+vendor
+.cargo
+generate-ppa-release-script.sh
+release-ppa.sh
+debian/
+snap/
+snapcraft.yaml
+*.snap

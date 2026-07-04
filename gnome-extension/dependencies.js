@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib';
+import { runtime } from './runtime.js';
 
 export function checkDependencies() {
     let hasFfmpeg = GLib.find_program_in_path('ffmpeg') !== null;
@@ -17,27 +18,11 @@ export function checkDependencies() {
 }
 
 export function checkDaemon() {
-    let execPath = GLib.find_program_in_path('lens-for-gnome.daemon') || GLib.find_program_in_path('lens-for-gnome');
-    if (execPath) return true;
-
-    let home = GLib.get_home_dir();
-    let standardPaths = [
-        '/snap/bin/lens-for-gnome.daemon',
-        '/snap/bin/lens-for-gnome',
-        '/snap/lens-for-gnome/current',
-        home + '/.cargo/bin/lens-for-gnome',
-        home + '/.local/bin/lens-for-gnome'
-    ];
-
-    for (let p of standardPaths) {
-        if (GLib.file_test(p, GLib.FileTest.EXISTS)) return true;
-    }
-
-    return false;
+    return runtime.isDaemonInstalled();
 }
 
 export function getDaemonInstallCommand() {
-    return "sudo snap install lens-for-gnome";
+    return "sudo snap install lens-for-gnome && sudo snap connect lens-for-gnome:removable-media";
 }
 
 export function getDistributionInstructions() {

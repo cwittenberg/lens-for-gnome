@@ -20,7 +20,7 @@ mkdir -p "$BUILD_DIR/themes"
 mkdir -p "po"
 
 echo "Validating extension files..."
-for file in metadata.json extension.js ui.js ui_preview.js ui_preview_image.js ui_preview_video.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_mail.js prefs_about.js prefs_look_and_feel.js prefs_dependencies.js schemas/org.gnome.shell.extensions.lens-for-gnome.gschema.xml; do
+for file in metadata.json extension.js runtime.js ui.js ui_preview.js ui_preview_image.js ui_preview_video.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_mail.js prefs_about.js prefs_look_and_feel.js dependencies.js schemas/org.gnome.shell.extensions.lens-for-gnome.gschema.xml; do
     if [ ! -f "$file" ]; then
         echo "Error: $file not found in the current directory. Please make sure all files exist."
         exit 1
@@ -32,7 +32,7 @@ glib-compile-schemas --strict schemas/
 
 echo "Extracting strings and generating translation template..."
 if command -v xgettext &> /dev/null; then
-    xgettext --from-code=UTF-8 --language=JavaScript --keyword=_ --add-comments -o po/lens-for-gnome.pot extension.js ui.js ui_preview.js ui_preview_image.js ui_preview_video.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_mail.js prefs_about.js prefs_look_and_feel.js prefs_dependencies.js
+    xgettext --from-code=UTF-8 --language=JavaScript --keyword=_ --add-comments -o po/lens-for-gnome.pot extension.js runtime.js ui.js ui_preview.js ui_preview_image.js ui_preview_video.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_mail.js prefs_about.js prefs_look_and_feel.js dependencies.js
     echo "Translation template generated at po/lens-for-gnome.pot"
 else
     echo "Warning: xgettext not found, skipping string extraction."
@@ -58,7 +58,7 @@ for po_file in po/*.po; do
 done
 
 echo "Copying files to build directory..."
-cp metadata.json extension.js ui.js ui_preview.js ui_preview_image.js ui_preview_video.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_mail.js prefs_about.js prefs_look_and_feel.js prefs_dependencies.js "$BUILD_DIR/"
+cp metadata.json extension.js runtime.js ui.js ui_preview.js ui_preview_image.js ui_preview_video.js ui_search.js ui_results.js ui_status.js indicator.js service.js prefs.js prefs_main.js prefs_ai.js prefs_index.js prefs_mail.js prefs_about.js prefs_look_and_feel.js dependencies.js "$BUILD_DIR/"
 cp -r schemas "$BUILD_DIR/"
 
 rm -f "$BUILD_DIR/schemas/gschemas.compiled"
@@ -93,6 +93,7 @@ echo "Packaging extension..."
 if command -v gnome-extensions &> /dev/null; then
     PACK_ARGS=(
         "--extra-source=extension.js"
+        "--extra-source=runtime.js"
         "--extra-source=ui.js"
         "--extra-source=ui_preview.js"
         "--extra-source=ui_preview_image.js"
@@ -109,7 +110,7 @@ if command -v gnome-extensions &> /dev/null; then
         "--extra-source=prefs_mail.js"
         "--extra-source=prefs_about.js"
         "--extra-source=prefs_look_and_feel.js"
-        "--extra-source=prefs_dependencies.js"
+        "--extra-source=dependencies.js"
         "--extra-source=schemas"
     )
 
@@ -189,6 +190,7 @@ mkdir -p "$EXTENSION_DIR"
 
 cp "$BUILD_DIR/metadata.json" "$EXTENSION_DIR/"
 cp "$BUILD_DIR/extension.js" "$EXTENSION_DIR/"
+cp "$BUILD_DIR/runtime.js" "$EXTENSION_DIR/"
 cp "$BUILD_DIR/ui.js" "$EXTENSION_DIR/"
 cp "$BUILD_DIR/ui_preview.js" "$EXTENSION_DIR/"
 cp "$BUILD_DIR/ui_preview_image.js" "$EXTENSION_DIR/"
@@ -205,7 +207,7 @@ cp "$BUILD_DIR/prefs_index.js" "$EXTENSION_DIR/"
 cp "$BUILD_DIR/prefs_mail.js" "$EXTENSION_DIR/"
 cp "$BUILD_DIR/prefs_about.js" "$EXTENSION_DIR/"
 cp "$BUILD_DIR/prefs_look_and_feel.js" "$EXTENSION_DIR/"
-cp "$BUILD_DIR/prefs_dependencies.js" "$EXTENSION_DIR/"
+cp "$BUILD_DIR/dependencies.js" "$EXTENSION_DIR/"
 cp -r "$BUILD_DIR/schemas" "$EXTENSION_DIR/"
 
 if [ -f "$BUILD_DIR/stylesheet.css" ]; then

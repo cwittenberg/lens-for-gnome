@@ -11,9 +11,11 @@ pub struct VectorSearchPlugin {
 }
 
 impl VectorSearchPlugin {
-    pub fn new(store: Arc<VectorStore>) -> Self {
+    pub fn new(store: Arc<VectorStore>, data_dir: &str) -> Self {
         let mut options = InitOptions::default();
         options.model_name = EmbeddingModel::ParaphraseMLMiniLML12V2;
+        // Explicitly map the download path to the writable shared data directory
+        options.cache_dir = std::path::PathBuf::from(data_dir).join("fastembed_cache");
 
         let ai_model = TextEmbedding::try_new(options)
             .expect("Failed to init Multi-lingual AI for query embedding");

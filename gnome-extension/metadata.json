@@ -3,11 +3,6 @@
   "description": "Spotlight-alike intelligent search utilizing the local Lens for GNOME Daemon.",
   "uuid": "lens-for-gnome@cwittenberg",
   "shell-version": [
-    "45",
-    "46",
-    "47",
-    "48",
-    "49",
     "50"
   ],
   "settings-schema": "org.gnome.shell.extensions.lens-for-gnome",

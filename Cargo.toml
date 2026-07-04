@@ -1,7 +1,7 @@
 # Cargo.toml
 [package]
 name = "lens-for-gnome"
-version = "0.4.0"
+version = "0.4.5"
 edition = "2021"
 default-run = "lens-for-gnome"
 

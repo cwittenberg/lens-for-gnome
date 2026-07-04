@@ -2,7 +2,7 @@
 <schemalist>
   <schema id="org.gnome.shell.extensions.lens-for-gnome" path="/org/gnome/shell/extensions/lens-for-gnome/">
     <key name="shortcut" type="as">
-      <default>['&lt;Super&gt;space']</default>
+      <default>['&lt;Alt&gt;v']</default>
       <summary>Toggle Lens for GNOME shortcut</summary>
       <description>Shortcut to toggle the Lens for GNOME search bar.</description>
     </key>

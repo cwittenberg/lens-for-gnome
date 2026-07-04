@@ -95,6 +95,8 @@ impl IngestionPipeline {
         let mut options = InitOptions::default();
         options.model_name = EmbeddingModel::ParaphraseMLMiniLML12V2;
         options.show_download_progress = true;
+        // Explicitly map the download path to the writable shared data directory
+        options.cache_dir = runtime_adapter.data_dir().join("fastembed_cache");
 
         let ai_model = TextEmbedding::try_new(options)
             .expect("Failed to initialize Multi-lingual AI Model");

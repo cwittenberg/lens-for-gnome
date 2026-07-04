@@ -1,9 +1,10 @@
 // src/engine/model_manager.rs
 use std::env;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
@@ -118,7 +119,8 @@ impl ModelManager {
     }
 
     /// Validates the model exists on disk, falling back to a blocking sync download.
-    pub fn ensure_model_available(model_path: &str, url: &str) {
+    /// Broadcasts progress to standard logs and the provided status_tracker.
+    pub fn ensure_model_available(model_path: &str, url: &str, status_tracker: Option<Arc<Mutex<String>>>) {
         if Self::model_file_exists(model_path) {
             return;
         }
@@ -129,7 +131,7 @@ impl ModelManager {
         println!("This may take several minutes depending on your connection.");
         println!("=======================================================\n");
 
-        if let Err(err) = Self::download_file_blocking(model_path, url) {
+        if let Err(err) = Self::download_file_blocking(model_path, url, status_tracker) {
             panic!("{}", err);
         }
     }
@@ -213,9 +215,6 @@ impl ModelManager {
                     Err(_) => continue,
                 };
 
-                print!("{}", b as char);
-                let _ = std::io::stdout().flush();
-
                 if b == b'\r' || b == b'\n' {
                     if let Some(percent) = Self::parse_curl_progress_percent(&current_line) {
                         // Fix for HuggingFace HTTP 302 Redirects which hit 100% on the redirect payload 
@@ -231,6 +230,11 @@ impl ModelManager {
                                 "message": format!("Downloading model ({}%)...", percent)
                             }).to_string());
 
+                            // Output to standard logger safely without spamming blob data
+                            if percent % 5 == 0 || percent == 100 {
+                                println!("[LLM Download] Progress: {}%", percent);
+                            }
+
                             last_reported = percent;
                         }
                     }
@@ -238,16 +242,6 @@ impl ModelManager {
                     current_line.clear();
                 } else {
                     current_line.push(b as char);
-                }
-            }
-
-            if let Some(percent) = Self::parse_curl_progress_percent(&current_line) {
-                if percent > last_reported {
-                    send_chunk(json!({
-                        "status": "downloading",
-                        "progress": percent,
-                        "message": format!("Downloading model ({}%)...", percent)
-                    }).to_string());
                 }
             }
         }
@@ -512,7 +506,7 @@ impl ModelManager {
             .unwrap_or(false)
     }
 
-    fn download_file_blocking(model_path: &str, url: &str) -> Result<(), String> {
+    fn download_file_blocking(model_path: &str, url: &str, status_tracker: Option<Arc<Mutex<String>>>) -> Result<(), String> {
         if let Some(parent) = Path::new(model_path).parent() {
             fs::create_dir_all(parent).map_err(|e| format!("Failed to create model directory: {}", e))?;
         }
@@ -520,15 +514,55 @@ impl ModelManager {
         let temp_model_path = format!("{}.download", model_path);
         let _ = fs::remove_file(&temp_model_path);
 
-        let status = Command::new("curl")
+        let mut child = Command::new("curl")
             .arg("-L")
             .arg("--fail")
             .arg("-#")
             .arg("-o")
             .arg(&temp_model_path)
             .arg(url)
-            .status()
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| format!("Failed to execute curl to download the model: {}", e))?;
+
+        if let Some(stderr) = child.stderr.take() {
+            let mut last_reported = -1;
+            let mut current_line = String::new();
+
+            for byte in stderr.bytes() {
+                let b = match byte {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+
+                if b == b'\r' || b == b'\n' {
+                    if let Some(percent) = Self::parse_curl_progress_percent(&current_line) {
+                        if percent < last_reported && last_reported >= 95 && percent <= 5 {
+                            last_reported = -1;
+                        }
+
+                        if percent > last_reported {
+                            // Print cleanly every 5% to standard systemd logs
+                            if percent % 5 == 0 || percent == 100 {
+                                println!("[LLM Download] Progress: {}%", percent);
+                            }
+                            // Broadcast dynamic updates globally for the LLM UI router to observe
+                            if let Some(ref tracker) = status_tracker {
+                                if let Ok(mut guard) = tracker.lock() {
+                                    *guard = format!("Downloading model: {}%", percent);
+                                }
+                            }
+                            last_reported = percent;
+                        }
+                    }
+                    current_line.clear();
+                } else {
+                    current_line.push(b as char);
+                }
+            }
+        }
+
+        let status = child.wait().map_err(|e| format!("Failed to wait for curl: {}", e))?;
 
         if !status.success() {
             let _ = fs::remove_file(&temp_model_path);
