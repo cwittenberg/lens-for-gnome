@@ -188,6 +188,19 @@ impl SystemRouter {
                             break;
                         }
                         
+                        // Try parent dir fallback for dynamically typed unindexed paths
+                        if let Some(last_slash) = candidate.rfind('/') {
+                            let parent_len = last_slash + 1;
+                            let parent = &candidate[..parent_len];
+                            let expanded_parent = parent.replace("~", &home_dir);
+                            if std::path::Path::new(&expanded_parent).is_dir() {
+                                dir_val = parent.to_string();
+                                chars_to_consume = parent_len;
+                                found_valid_dir = true;
+                                break;
+                            }
+                        }
+
                         if let Some(last_space) = candidate.rfind(' ') {
                             candidate = candidate[..last_space].to_string();
                         } else {
@@ -243,6 +256,19 @@ impl SystemRouter {
                         break;
                     }
                     
+                    if let Some(last_slash) = candidate.rfind('/') {
+                        let parent_len = last_slash + 1;
+                        let parent = &candidate[..parent_len];
+                        let expanded_parent = parent.replace("~", &home_dir);
+                        if std::path::Path::new(&expanded_parent).is_dir() {
+                            search_query.directory_filter = Some(expanded_parent.trim().to_string());
+                            let before = &current_query[..start];
+                            let after = &current_query[start + parent_len..];
+                            current_query = format!("{} {}", before, after);
+                            break;
+                        }
+                    }
+
                     if let Some(last_space) = candidate.rfind(' ') {
                         candidate = candidate[..last_space].to_string();
                     } else {
@@ -277,25 +303,63 @@ impl SystemRouter {
         
         search_query.raw_text = clean_text_parts.join(" ");
 
-        if search_query.raw_text.is_empty() 
-            && search_query.metadata_filters.is_empty() 
-            && search_query.min_timestamp.is_none() 
-            && search_query.max_timestamp.is_none() 
-        {
-            if let Some(dir) = &search_query.directory_filter {
-                if std::path::Path::new(dir).is_dir() {
-                    let fp_start = Instant::now();
-                    let browse_results = self.store.browse_directory(dir);
-                    
-                    println!("[Router DEBUG] Directory Browse took: {:.2?} (Found {} results)", fp_start.elapsed(), browse_results.len());
+        let mut dynamic_fs_results = Vec::new();
+        
+        // Dynamically invoke a live unindexed directory crawl if the router captures a path marker.
+        if let Some(dir) = &search_query.directory_filter {
+            if std::path::Path::new(dir).is_dir() {
+                let fp_start = Instant::now();
+                let browse_results = self.store.browse_directory(dir);
+                println!("[Router DEBUG] Directory Browse took: {:.2?} (Found {} results)", fp_start.elapsed(), browse_results.len());
 
+                if search_query.raw_text.is_empty() 
+                    && search_query.metadata_filters.is_empty() 
+                    && search_query.min_timestamp.is_none() 
+                    && search_query.max_timestamp.is_none() 
+                {
                     send_chunk(serde_json::json!({
                         "status": "final",
                         "mode": "fast_pass",
                         "results": browse_results
                     }).to_string());
-                    
                     return;
+                } else {
+                    // Extract local memory matches to bridge unindexed depth drops.
+                    let q = search_query.raw_text.to_lowercase();
+                    dynamic_fs_results = browse_results.into_iter().filter(|r| {
+                        let mut matches = true;
+                        
+                        if !q.is_empty() {
+                            matches = r.title.to_lowercase().contains(&q) || r.id.to_lowercase().contains(&q);
+                        }
+                        
+                        if matches {
+                            for (k, v) in &search_query.metadata_filters {
+                                if let Some(doc_v) = r.metadata.get(k) {
+                                    if doc_v.to_lowercase() != v.to_lowercase() {
+                                        matches = false;
+                                        break;
+                                    }
+                                } else {
+                                    matches = false;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if matches {
+                            if let Some(min) = search_query.min_timestamp {
+                                if r.created_at.unwrap_or(0) < min { matches = false; }
+                            }
+                        }
+                        
+                        if matches {
+                            if let Some(max) = search_query.max_timestamp {
+                                if r.created_at.unwrap_or(0) > max { matches = false; }
+                            }
+                        }
+                        matches
+                    }).collect();
                 }
             }
         }
@@ -326,6 +390,14 @@ impl SystemRouter {
                 fast_results.extend(plugin.execute(&search_query));
             }
         }
+        
+        // Merge seamlessly with dynamic live crawler results ensuring zero duplicates.
+        for fs_res in dynamic_fs_results {
+            if !fast_results.iter().any(|r| r.id == fs_res.id) {
+                fast_results.push(fs_res);
+            }
+        }
+
         println!("[Router DEBUG] Plugins & Vector Search took: {:.2?} (Found {} results)", fp_start.elapsed(), fast_results.len());
 
         let partial_payload: Vec<_> = fast_results.iter().map(|r| {
