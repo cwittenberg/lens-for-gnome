@@ -16,9 +16,9 @@ class GnomeLensResultsList extends St.ScrollView {
             reactive: true,
             can_focus: true
         });
-
         this._settings = settings;
         this.callbacks = callbacks || {};
+
         this._results = [];
         this._resultWidgets = [];
         this._selectedIndex = -1;
@@ -74,6 +74,7 @@ class GnomeLensResultsList extends St.ScrollView {
             this.launchSelected();
             return Clutter.EVENT_STOP;
         }
+
         return super.vfunc_key_press_event(keyEvent);
     }
 
@@ -200,7 +201,6 @@ class GnomeLensResultsList extends St.ScrollView {
     clear() {
         this._results = [];
         this._selectedIndex = -1;
-
         for (let widget of this._resultWidgets) {
             widget.reactive = false;
             widget.remove_all_transitions();
@@ -220,13 +220,18 @@ class GnomeLensResultsList extends St.ScrollView {
         let targetFile = Gio.File.new_for_path(targetPath);
         
         let parent = targetFile.get_parent();
-        if (!parent.query_exists(null)) {
-            try { 
-                parent.make_directory_with_parents(null); 
-            } catch(e) {
-                console.debug(`[Lens for GNOME] Thumb cache dir build error: ${e.message}`);
+        parent.query_info_async(Gio.FILE_ATTRIBUTE_STANDARD_TYPE, Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, cancellable, (f, res) => {
+            let exists = false;
+            try {
+                f.query_info_finish(res);
+                exists = true;
+            } catch(e) {}
+            if (!exists) {
+                parent.make_directory_async(GLib.PRIORITY_DEFAULT, cancellable, (pf, pres) => {
+                    try { pf.make_directory_finish(pres); } catch(e) {}
+                });
             }
-        }
+        });
 
         let monitor;
         try {
@@ -240,15 +245,12 @@ class GnomeLensResultsList extends St.ScrollView {
                 monitor.cancel();
                 return;
             }
+
             if (targetFile.query_exists(null)) {
-                try {
-                    iconActor.set_gicon(new Gio.FileIcon({ file: targetFile }));
-                    iconActor.set_icon_size(32);
-                    iconActor.add_style_class_name('lens-result-preview');
-                    iconActor.remove_style_class_name('lens-result-icon');
-                } catch (e) {
-                    console.debug(`[Lens for GNOME] Could not set thumbnail: ${e.message}`);
-                }
+                iconActor.set_gicon(new Gio.FileIcon({ file: targetFile }));
+                iconActor.set_icon_size(32);
+                iconActor.add_style_class_name('lens-result-preview');
+                iconActor.remove_style_class_name('lens-result-icon');
                 monitor.cancel();
             }
         };
@@ -262,14 +264,10 @@ class GnomeLensResultsList extends St.ScrollView {
         }
         
         if (isImagePreview) {
-            try {
-                iconActor.set_gicon(new Gio.FileIcon({ file: originalFile }));
-                iconActor.set_icon_size(32);
-                iconActor.add_style_class_name('lens-result-preview');
-                iconActor.remove_style_class_name('lens-result-icon');
-            } catch (e) {
-                console.debug(`[Lens for GNOME] Original file thumb fallback failed: ${e.message}`);
-            }
+            iconActor.set_gicon(new Gio.FileIcon({ file: originalFile }));
+            iconActor.set_icon_size(32);
+            iconActor.add_style_class_name('lens-result-preview');
+            iconActor.remove_style_class_name('lens-result-icon');
         }
     }
 
@@ -350,6 +348,7 @@ class GnomeLensResultsList extends St.ScrollView {
             let aMatch = a.ai_matched === true;
             let bMatch = b.ai_matched === true;
             if (aMatch !== bMatch) return aMatch ? -1 : 1;
+
             return (b.score || 0) - (a.score || 0);
         });
 
@@ -428,6 +427,7 @@ class GnomeLensResultsList extends St.ScrollView {
         
         let start = this._renderedCount;
         let end = Math.min(start + this._chunkSize, this._results.length);
+
         let groupNames = ["Folders", "Applications & Tools", "Emails", "Indexed Documents", "Other Files"];
 
         for (let i = start; i < end; i++) {
@@ -460,11 +460,11 @@ class GnomeLensResultsList extends St.ScrollView {
             }
             
             let cancellable = new Gio.Cancellable();
-            itemBox.connect('destroy', () => {
+            itemBox.connectObject('destroy', () => {
                 if (!cancellable.is_cancelled()) {
                     cancellable.cancel();
                 }
-            });
+            }, this);
 
             itemBox.connectObject('button-press-event', () => {
                 if (isFolder) {
@@ -603,7 +603,6 @@ class GnomeLensResultsList extends St.ScrollView {
                 });
                 titleBox.add_child(pathLabel);
             }
-
             textBox.add_child(titleBox);
 
             let showSnippet = true;
@@ -621,7 +620,7 @@ class GnomeLensResultsList extends St.ScrollView {
             }
 
             if (res.ai_reasoning) {
-                let reasoningPrefix = res.ai_matched ? '↳ ' : '✗ ';
+                let reasoningPrefix = res.ai_matched ? '🧠 ' : '❌ ';
                 let reasoningLabel = new St.Label({
                     text: reasoningPrefix + res.ai_reasoning,
                     style_class: 'lens-result-ai-reasoning',

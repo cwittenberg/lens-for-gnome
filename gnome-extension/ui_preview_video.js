@@ -18,10 +18,6 @@ function ensureHistoryLoaded() {
     
     _historyLoadPromise = new Promise((resolve) => {
         let file = Gio.File.new_for_path(HISTORY_FILE);
-        if (!file.query_exists(null)) {
-            resolve();
-            return;
-        }
         
         file.load_contents_async(null, (f, res) => {
             try {
@@ -33,7 +29,7 @@ function ensureHistoryLoaded() {
                     }
                 }
             } catch (e) {
-                console.warn(`[Lens for GNOME] Failed to parse playback history: ${e.message}`);
+                // File does not exist or JSON parse error, proceed normally.
             }
             resolve();
         });
@@ -48,7 +44,6 @@ function savePlaybackHistoryAsync() {
         let keysToRemove = keys.slice(0, PlaybackHistory.size - 50);
         for (let k of keysToRemove) PlaybackHistory.delete(k);
     }
-
     let file = Gio.File.new_for_path(HISTORY_FILE);
     let obj = Object.fromEntries(PlaybackHistory);
     let bytes = new GLib.Bytes(new TextEncoder().encode(JSON.stringify(obj)));
@@ -103,11 +98,9 @@ export const GnomeLensVideoControls = GObject.registerClass({
             vertical: true,
             reactive: true
         });
-
         this._player = player;
         this._isDraggingScrub = false;
         this._isDraggingVolume = false;
-
         this._buildControlsUI();
     }
 
@@ -188,7 +181,6 @@ export const GnomeLensVideoControls = GObject.registerClass({
             reactive: true,
             y_align: Clutter.ActorAlign.CENTER
         });
-
         this._volumeFill = new St.Widget({
             style_class: 'lens-volume-fill',
             width: 50,
@@ -196,6 +188,7 @@ export const GnomeLensVideoControls = GObject.registerClass({
         });
         this._volumeTrack.add_child(this._volumeFill);
         this._volumeBox.add_child(this._volumeTrack);
+
         toolRow.add_child(this._volumeBox);
 
         this._volumeTrack.connectObject('button-press-event', (actor, event) => {
@@ -203,7 +196,6 @@ export const GnomeLensVideoControls = GObject.registerClass({
             this._processVolumeLocation(event);
             return Clutter.EVENT_STOP;
         }, this);
-
         this._volumeTrack.connectObject('motion-event', (actor, event) => {
             if (this._isDraggingVolume) {
                 this._processVolumeLocation(event);
@@ -211,7 +203,6 @@ export const GnomeLensVideoControls = GObject.registerClass({
             }
             return Clutter.EVENT_PROPAGATE;
         }, this);
-
         this._volumeTrack.connectObject('button-release-event', () => {
             this._isDraggingVolume = false;
             return Clutter.EVENT_STOP;
@@ -245,6 +236,7 @@ export const GnomeLensVideoControls = GObject.registerClass({
     updateUIState(positionNs, durationNs, currentVolume, isMuted) {
         let trackAlloc = this._scrubBar.get_allocation_box();
         let trackWidth = trackAlloc.x2 - trackAlloc.x1;
+        
         if (trackWidth > 0 && durationNs > 0) {
             let pct = positionNs / durationNs;
             this._scrubFill.set_width(Math.floor(trackWidth * pct));
@@ -307,9 +299,11 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         this._pipeline = null;
         this._sink = null;
         this._busWatchId = 0;
+
         this._imageContent = null;
         this._contentWidth = 0;
         this._contentHeight = 0;
+
         this._proc = null;
         this._lastTempFile = null;
 
@@ -340,7 +334,6 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         }, this);
 
         this.connectObject('destroy', () => this._onDestroy(), this);
-
         this._resetHideTimer();
         
         ensureHistoryLoaded().then(() => {
@@ -407,7 +400,6 @@ export const GnomeLensVideoPreview = GObject.registerClass({
 
             this._targetSeekNs = targetNs;
             this._isSeeking = true;
-
             this._pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH, targetNs);
         } else {
             if (isPercentage) {
@@ -428,6 +420,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
     seekToPercentage(percentage) {
         this._resetHideTimer();
         if (this._durationNs <= 0) return;
+
         let targetNs = Math.floor(this._durationNs * percentage);
         
         if (this._pipeline) {
@@ -483,6 +476,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             GLib.source_remove(this._idleRenderId);
             this._idleRenderId = 0;
         }
+
         if (this._pipeline) {
             let bus = this._pipeline.get_bus();
             if (this._busWatchId > 0 && bus) {
@@ -494,17 +488,17 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             this._pipeline = null;
             this._sink = null;
         }
+
         if (this._proc) {
             this._proc.force_exit();
             this._proc = null;
         }
+
         if (this._lastTempFile) {
             let file = Gio.File.new_for_path(this._lastTempFile);
-            if (file.query_exists(null)) {
-                try { 
-                    file.delete(null); 
-                } catch (e) { console.debug(`[Lens for GNOME] Garbage collection temp failed: ${e.message}`); }
-            }
+            file.delete_async(GLib.PRIORITY_DEFAULT, null, (f, res) => {
+                try { f.delete_finish(res); } catch(e) {}
+            });
             this._lastTempFile = null;
         }
     }
@@ -516,7 +510,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             return;
         }
 
-        this._stopVideo(); 
+        this._stopVideo();
 
         try {
             let pipeline = Gst.ElementFactory.make('playbin', null);
@@ -605,7 +599,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                 this._updateHUD();
                 return GLib.SOURCE_CONTINUE;
             });
-            
+
         } catch (e) {
             this._extractFrameAndScheduleNext();
         }
@@ -623,6 +617,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         let width = 0, height = 0;
         let [successW, w] = structure.get_int('width');
         let [successH, h] = structure.get_int('height');
+        
         if (successW && successH) {
             width = w; height = h;
         }
@@ -653,6 +648,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             try {
                 let glibBytes = (data instanceof GLib.Bytes) ? data : new GLib.Bytes(data);
                 let coglCtx = null;
+                
                 try {
                     if (global.stage && global.stage.context) {
                         coglCtx = global.stage.context.get_backend().get_cogl_context();
@@ -673,6 +669,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             if (bytesSuccess) {
                 this._imageActor.queue_redraw();
             }
+
             buffer.unmap(mapInfo);
         }
     }
@@ -682,6 +679,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             GLib.source_remove(this._playbackTimerId);
             this._playbackTimerId = 0;
         }
+
         if (this._proc) {
             this._proc.force_exit();
             this._proc = null;
@@ -689,6 +687,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         
         let secondsCounter = Math.floor(this._currentTimeNs / 1000000000);
         let tempFile = GLib.build_filenamev([GLib.get_tmp_dir(), `lens-for-gnome-preview-${GLib.uuid_string_random()}.jpg`]);
+
         let cmd = ['ffmpeg', '-y', '-ss', secondsCounter.toString(), '-i', this._filepath, '-vframes', '1', '-q:v', '2', '-vf', 'scale=640:-1', tempFile];
 
         try {
@@ -704,33 +703,40 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                 this._proc = null;
 
                 let file = Gio.File.new_for_path(tempFile);
-                if (file.query_exists(null)) {
-                    if (!this.visible) {
-                        try { file.delete(null); } catch(e) { console.debug(`[Lens for GNOME] Failed removing stale preview map: ${e.message}`); }
-                        return;
-                    }
+                file.query_info_async(Gio.FILE_ATTRIBUTE_STANDARD_TYPE, Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null, (f, resInfo) => {
+                    let exists = false;
+                    try {
+                        f.query_info_finish(resInfo);
+                        exists = true;
+                    } catch (e) {}
 
-                    this._imageActor.set_content(null);
-                    this._imageActor.style = `background-image: url("file://${tempFile}"); background-size: contain; background-repeat: no-repeat;`;
-                    
-                    if (this._lastTempFile) {
-                        let lastFile = Gio.File.new_for_path(this._lastTempFile);
-                        if (lastFile.query_exists(null)) {
-                            try { lastFile.delete(null); } catch(e) { console.debug(`[Lens for GNOME] Failed cleaning old frame buffer: ${e.message}`); }
+                    if (exists) {
+                        if (!this.visible) {
+                            f.delete_async(GLib.PRIORITY_DEFAULT, null, (df, dres) => { try { df.delete_finish(dres); } catch(e) {} });
+                            return;
                         }
+                        
+                        this._imageActor.set_content(null);
+                        this._imageActor.style = `background-image: url("file://${tempFile}"); background-size: contain; background-repeat: no-repeat;`;
+                        
+                        if (this._lastTempFile) {
+                            let lastFile = Gio.File.new_for_path(this._lastTempFile);
+                            lastFile.delete_async(GLib.PRIORITY_DEFAULT, null, (df, dres) => { try { df.delete_finish(dres); } catch(e) {} });
+                        }
+                        this._lastTempFile = tempFile;
                     }
-                    this._lastTempFile = tempFile;
-                }
-                
-                this._updateHUD();
 
-                this._playbackTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-                    this._playbackTimerId = 0;
-                    this._currentTimeNs += 1000000000;
-                    this._extractFrameAndScheduleNext();
-                    return GLib.SOURCE_REMOVE;
+                    this._updateHUD();
+
+                    this._playbackTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                        this._playbackTimerId = 0;
+                        this._currentTimeNs += 1000000000;
+                        this._extractFrameAndScheduleNext();
+                        return GLib.SOURCE_REMOVE;
+                    });
                 });
             });
+
         } catch (e) {
             this._proc = null;
         }
