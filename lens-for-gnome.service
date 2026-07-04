@@ -1,6 +1,9 @@
-# lens-for-gnome.service
+# ~/.config/systemd/user/lens-for-gnome.service
 [Unit]
-Description=Lens for GNOME Vector Search Daemon
+Description=Lens for GNOME Backend Daemon
+Documentation=https://github.com/cwittenberg/lens-for-gnome
+# CRITICAL: Wait for the desktop environment and keyring to be fully unlocked by PAM
+Requires=graphical-session.target
 After=graphical-session.target
 
 [Service]
@@ -8,10 +11,8 @@ Type=simple
 ExecStart=/usr/bin/lens-for-gnome
 Restart=on-failure
 RestartSec=5
-Nice=10
-IOSchedulingClass=idle
-StandardOutput=journal
-StandardError=journal
+# Ensure the DBus session address is passed to the application
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus"
 
 [Install]
 WantedBy=default.target

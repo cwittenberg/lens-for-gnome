@@ -9,6 +9,16 @@ use crate::domain::SearchResult;
 pub fn build_rhai_engine() -> rhai::Engine {
     let mut engine = rhai::Engine::new();
     
+    // --- STRICT SANDBOXING AND SECURITY LIMITS ---
+    // Rhai inherently does not have access to the OS shell, file system, or network.
+    // The primary attack vector from an LLM is a Denial of Service (infinite loops 
+    // or massive memory allocation). These hardware limits prevent daemon freezes.
+    engine.set_max_operations(5000);        // Prevent infinite loops
+    engine.set_max_expr_depths(50, 50);     // Prevent stack overflow from deep recursion
+    engine.set_max_array_size(100);         // Cap memory allocation for arrays
+    engine.set_max_map_size(100);           // Cap memory allocation for objects
+    engine.set_max_string_size(100_000);    // Cap memory for string manipulation
+    
     // --- Standard Library Injections ---
     
     // 1. String parser (Shadows Rhai's built-in that panics on empty strings)

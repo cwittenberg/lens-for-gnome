@@ -144,7 +144,11 @@ echo "-> Building Lens for GNOME (Optimized Release Mode)..."
 # Explicitly push standard search flags directly into rustc so the linker finds the libraries
 export RUSTFLAGS="-L /usr/local/cuda/lib64 -L /usr/lib/x86_64-linux-gnu -L /opt/cuda/lib64 $RUSTFLAGS"
 
-cargo build --release $CARGO_FEATURES
+# FIX: Halt the entire execution script instantly if the Rust compiler hits an error.
+if ! cargo build --release $CARGO_FEATURES; then
+    echo "-> CRITICAL: Cargo build failed! Aborting run sequence to prevent executing an outdated, broken binary."
+    exit 1
+fi
 
 echo "-> Stopping any existing instances..."
 killall lens-for-gnome 2>/dev/null || true

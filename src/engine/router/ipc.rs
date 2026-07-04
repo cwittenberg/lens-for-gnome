@@ -1,4 +1,3 @@
-// src/engine/router/ipc.rs
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -151,6 +150,108 @@ where
             "status": "done",
             "message": "All mail data and vectors cleared."
         }).to_string());
+        return true;
+    }
+
+    // ACTION: Return Mail Password
+    if json["action"].as_str() == Some("get_mail_password") {
+        if let Some(email) = json["email"].as_str() {
+            // Attempt to retrieve from D-Bus Keyring first
+            if let Ok(entry) = keyring::Entry::new("lens_for_gnome_gmail", email) {
+                if let Ok(password) = entry.get_password() {
+                    send_chunk(serde_json::json!({
+                        "status": "password_data",
+                        "password": password
+                    }).to_string());
+                    return true;
+                }
+            }
+            
+            // Check the bulletproof local fallback file
+            let secret_file = runtime_adapter.config_dir().join("gmail_secret.key");
+            if let Ok(password) = std::fs::read_to_string(&secret_file) {
+                if !password.trim().is_empty() {
+                    send_chunk(serde_json::json!({
+                        "status": "password_data",
+                        "password": password.trim()
+                    }).to_string());
+                    return true;
+                }
+            }
+        }
+        send_chunk(serde_json::json!({
+            "status": "error",
+            "message": "No password found in keyring or secure fallback file."
+        }).to_string());
+        return true;
+    }
+
+    // ACTION: Update Mail Config
+    if json["action"].as_str() == Some("update_mail_config") {
+        println!("[IPC DEBUG] Received 'update_mail_config' command.");
+        
+        if let Some(email) = json["email"].as_str() {
+            println!("[IPC DEBUG] Email parsed successfully: {}", email);
+            
+            let history_years = json["history_years"].as_u64().unwrap_or(1);
+            let config_file = runtime_adapter.config_dir().join("gmail.json");
+            let secret_file = runtime_adapter.config_dir().join("gmail_secret.key");
+            
+            if let Some(password) = json["password"].as_str() {
+                println!("[IPC DEBUG] Password field found in payload. Length: {}", password.len());
+                
+                if password.is_empty() {
+                    // WIPE CREDENTIALS
+                    if let Ok(entry) = keyring::Entry::new("lens_for_gnome_gmail", email) {
+                        let _ = entry.delete_credential();
+                    }
+                    let _ = std::fs::remove_file(&secret_file);
+                    println!("[IPC] Mail credentials cleared from GNOME Keyring and secure fallback file.");
+                } else {
+                    // SAVE CREDENTIALS
+                    if let Ok(entry) = keyring::Entry::new("lens_for_gnome_gmail", email) {
+                        match entry.set_password(password) {
+                            Ok(_) => println!("[IPC] Successfully saved mail password to GNOME Keyring."),
+                            Err(e) => eprintln!("[IPC ERROR] Failed to save mail password to GNOME Keyring: {:?}", e),
+                        }
+                    }
+                    
+                    // 100% Guaranteed Fallback Write: Bypasses volatile D-Bus drops
+                    match std::fs::File::create(&secret_file) {
+                        Ok(mut f) => {
+                            use std::io::Write;
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                if let Ok(mut perms) = f.metadata().map(|m| m.permissions()) {
+                                    perms.set_mode(0o600); // Strict Unix Permissions
+                                    let _ = f.set_permissions(perms);
+                                }
+                            }
+                            match f.write_all(password.as_bytes()) {
+                                Ok(_) => println!("[IPC] Wrote mail password to secure fallback file: {:?}", secret_file),
+                                Err(e) => eprintln!("[IPC ERROR] Failed to write bytes to secure fallback file: {:?}", e),
+                            }
+                        },
+                        Err(e) => eprintln!("[IPC ERROR] Failed to create secure fallback file at {:?}: {:?}", secret_file, e),
+                    }
+                }
+            } else {
+                eprintln!("[IPC ERROR] 'password' key is MISSING from the JSON payload!");
+            }
+
+            let _ = std::fs::write(&config_file, serde_json::json!({
+                "email": email,
+                "history_years": history_years
+            }).to_string());
+            
+            send_chunk(serde_json::json!({
+                "status": "done",
+                "message": "Mail config updated."
+            }).to_string());
+        } else {
+            eprintln!("[IPC ERROR] 'email' key is MISSING from the JSON payload!");
+        }
         return true;
     }
 

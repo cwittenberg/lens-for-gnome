@@ -1,4 +1,3 @@
-// src/ingestion/mod.rs
 pub mod plaintext;
 pub mod csv_file;
 pub mod pdf;
@@ -14,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::{Read, Write};
 
 use walkdir::WalkDir;
 use rayon::prelude::*;
@@ -88,6 +88,7 @@ pub struct IngestionPipeline {
     domain_keywords: HashMap<String, Vec<String>>,
     blacklist: Vec<String>,
     pub progress: IndexerProgressState,
+    mail_dir: String,
 }
 
 impl IngestionPipeline {
@@ -104,6 +105,8 @@ impl IngestionPipeline {
         let config_path = format!("{}/domains.json", config_dir);
         let domain_keywords = Self::load_or_create_config(&config_path);
         let progress = IndexerProgressState::new(config_dir);
+        
+        let mail_dir = runtime_adapter.data_dir().join("mail").to_string_lossy().to_string();
 
         Self {
             store,
@@ -122,6 +125,7 @@ impl IngestionPipeline {
             domain_keywords,
             blacklist,
             progress,
+            mail_dir,
         }
     }
 
@@ -282,6 +286,22 @@ impl IngestionPipeline {
         let is_dir = path.is_dir();
         if !is_dir && !path.is_file() { return None; }
         
+        let ext = if is_dir {
+            "directory".to_string()
+        } else {
+            path.extension().and_then(|e| e.to_str()).unwrap_or("unknown").to_lowercase()
+        };
+
+        // If the file has already been ingested and purged for security, immediately bypass to prevent wiping the rich DB state
+        if path.is_file() && ext == "eml" {
+            let mut buffer = [0; 23];
+            if let Ok(mut f) = std::fs::File::open(path) {
+                if f.read_exact(&mut buffer).is_ok() && &buffer == b"[LENS_SECURE_TOMBSTONE]" {
+                    return None;
+                }
+            }
+        }
+
         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let path_str = canonical_path.to_string_lossy().to_string();
 
@@ -299,12 +319,6 @@ impl IngestionPipeline {
         }
 
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u64;
-
-        let ext = if is_dir {
-            "directory".to_string()
-        } else {
-            path.extension().and_then(|e| e.to_str()).unwrap_or("unknown").to_lowercase()
-        };
 
         let (mut content, mut is_shallow) = if is_dir {
             ("Folder Directory".to_string(), true)
@@ -371,12 +385,26 @@ impl IngestionPipeline {
 
             if let Some(vector) = vector_option {
                 self.store.insert_document(
-                    path_str,
+                    path_str.clone(),
                     content, 
                     vector,
                     modified_at,
                     metadata
                 );
+
+                // SECURE PURGE: Tombstone the EML file to prevent data exfiltration
+                if path_str.starts_with(&self.mail_dir) && path_str.ends_with(".eml") && !is_shallow {
+                    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).truncate(true).open(&path_str) {
+                        let _ = f.write_all(b"[LENS_SECURE_TOMBSTONE]");
+                        if let Ok(new_meta) = std::fs::metadata(&path_str) {
+                            if let Ok(sys_time) = new_meta.modified() {
+                                if let Ok(dur) = sys_time.duration_since(UNIX_EPOCH) {
+                                    self.store.update_document_timestamp(&path_str, dur.as_secs());
+                                }
+                            }
+                        }
+                    }
+                }
 
                 let filename = path.file_name().unwrap_or_default();
                 if is_shallow {
@@ -557,7 +585,31 @@ impl IngestionPipeline {
                     final_docs.push((doc.0, doc.1, vector, doc.3, doc.4));
                 }
 
+                // Isolate the EML paths that need to be tombstoned before we move ownership to the DB
+                let eml_paths: Vec<String> = final_docs.iter()
+                    .filter(|(path, _, vector, _, _)| {
+                        let is_shallow = vector.iter().all(|&v| v == 0.0);
+                        path.starts_with(&self.mail_dir) && path.ends_with(".eml") && !is_shallow
+                    })
+                    .map(|(path, _, _, _, _)| path.clone())
+                    .collect();
+
                 self.store.insert_documents(final_docs);
+
+                // SECURE PURGE
+                for path_str in eml_paths {
+                    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).truncate(true).open(&path_str) {
+                        let _ = f.write_all(b"[LENS_SECURE_TOMBSTONE]");
+                        if let Ok(new_meta) = std::fs::metadata(&path_str) {
+                            if let Ok(sys_time) = new_meta.modified() {
+                                if let Ok(dur) = sys_time.duration_since(UNIX_EPOCH) {
+                                    self.store.update_document_timestamp(&path_str, dur.as_secs());
+                                }
+                            }
+                        }
+                    }
+                }
+
                 self.progress.write_flush();
             }
         }

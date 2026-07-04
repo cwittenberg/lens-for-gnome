@@ -136,5 +136,15 @@
       <summary>Enable AI Filtering</summary>
       <description>Determines if the LLM should generate Rhai scripts to dynamically filter search results.</description>
     </key>
+    <key name="mail-account" type="s">
+      <default>''</default>
+      <summary>Google Email Address</summary>
+      <description>Email address for Gmail sync.</description>
+    </key>
+    <key name="mail-history-years" type="i">
+      <default>1</default>
+      <summary>History to Sync (Years)</summary>
+      <description>Limit the initial download to recent emails (Max 5 years).</description>
+    </key>
   </schema>
 </schemalist>
