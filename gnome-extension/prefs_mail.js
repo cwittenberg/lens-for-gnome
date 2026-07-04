@@ -6,7 +6,7 @@ import { runtime } from './runtime.js';
 
 function sendDaemonCommand(payloadObj, onMessage) {
     runtime.sendPayload(payloadObj, null, onMessage, 
-        () => { if (onMessage) onMessage({ status: 'error', message: 'Offline' }); },
+         () => { if (onMessage) onMessage({ status: 'error', message: 'Offline' }); },
         () => { if (onMessage) onMessage({ status: 'error', message: 'Offline' }); }
     );
 }
@@ -24,6 +24,7 @@ class MailConfigManager {
         this.pollId = null;
         this._timeoutIds = [];
         this._managedWidgets = [];
+
         this.buildUI();
         this.loadExistingConfig();
     }
@@ -39,8 +40,8 @@ class MailConfigManager {
     }
 
     buildUI() {
-        this.gmailGroup = new Adw.PreferencesGroup({ 
-             title: 'Gmail Integration',
+        this.gmailGroup = new Adw.PreferencesGroup({  
+            title: 'Gmail Integration',
             description: 'Sync your Gmail inbox locally for instant, private semantic search. Because Google enforces strict security, you must use an App Password, not your standard account password.'
         });
 
@@ -49,7 +50,6 @@ class MailConfigManager {
             subtitle: 'Go to Google Account -> Security -> 2-Step Verification -> App Passwords.',
             activatable: true
         }));
-
         const helpIcon = new Gtk.Image({ icon_name: 'external-link-symbolic', valign: Gtk.Align.CENTER });
         helpRow.add_suffix(helpIcon);
         helpRow.connect('activated', () => {
@@ -86,18 +86,17 @@ class MailConfigManager {
                 this.passwordRow.set_text(cleaned);
             }
         });
-
         this.gmailGroup.add(this.passwordRow);
 
         this.historyRow = new Adw.SpinRow({
             title: 'History to Sync (Years)',
             subtitle: 'Limit the initial download to recent emails (Max 5 years).',
-            adjustment: new Gtk.Adjustment({
-                 lower: 1,
-                 upper: 5,
-                 step_increment: 1,
-                 value: 1
-             })
+            adjustment: new Gtk.Adjustment({ 
+                lower: 1, 
+                upper: 5, 
+                step_increment: 1, 
+                value: 1 
+            })
         });
         this.gmailGroup.add(this.historyRow);
 
@@ -150,6 +149,7 @@ class MailConfigManager {
             margin_end: 12,
             visible: false
         });
+
         this.progressBar = new Gtk.ProgressBar({
             show_text: true,
             hexpand: true,
@@ -163,11 +163,11 @@ class MailConfigManager {
         this.page.add(this.syncGroup);
 
         this.dataGroup = new Adw.PreferencesGroup({ title: 'Data Management' });
+
         this.resyncRow = new Adw.ActionRow({
             title: 'Force Re-Sync',
             subtitle: 'Forget the last indexed date and download emails from the configured history limit again.'
         });
-
         this.resyncBtn = this._trackWidget(new Gtk.Button({
             icon_name: 'view-refresh-symbolic',
             valign: Gtk.Align.CENTER,
@@ -191,7 +191,6 @@ class MailConfigManager {
             title: 'Wipe Local Mail Data',
             subtitle: 'Permanently delete all downloaded .eml files and immediately remove them from the search index.'
         });
-
         this.wipeBtn = this._trackWidget(new Gtk.Button({
             icon_name: 'edit-clear-all-symbolic',
             valign: Gtk.Align.CENTER,
@@ -208,15 +207,17 @@ class MailConfigManager {
                 }));
             });
         });
-
         this.wipeRow.add_suffix(this.wipeBtn);
         this.dataGroup.add(this.wipeRow);
+
         this.page.add(this.dataGroup);
     }
 
     startPolling() {
-        this.pollId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
+        const doPoll = () => {
             sendDaemonCommand({ action: 'get_mail_status' }, (data) => {
+                let nextInterval = 5; // Default idle interval to prevent UI spam
+
                 if (data.status === 'mail_status' && data.data) {
                     let state = data.data;
                     
@@ -228,6 +229,7 @@ class MailConfigManager {
                         this.progressRow.set_title(`  Sync Fault: ${state.message}`);
                         this.progressBar.add_css_class('destructive-action');
                         this.progressBar.set_fraction(0.0);
+                        nextInterval = 5; 
                     } else if (state.is_syncing) {
                         this.progressBox.set_visible(true);
                         this.progressRow.set_title(`  ${state.message || 'Syncing entries...'}`);
@@ -238,14 +240,21 @@ class MailConfigManager {
                         if (fraction > 1.0) fraction = 1.0;
                         
                         this.progressBar.set_fraction(fraction);
+                        nextInterval = 1; // Fast polling when active
                     } else {
                         this.progressBox.set_visible(false);
                         this.progressRow.set_title(`  ${state.message || 'Idle'}`);
                     }
                 }
+                
+                // Reschedule next poll dynamically
+                this.pollId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, nextInterval, doPoll);
             });
-            return GLib.SOURCE_CONTINUE;
-        });
+            return GLib.SOURCE_REMOVE;
+        };
+
+        // Kick off initial poll
+        this.pollId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, doPoll);
     }
 
     loadExistingConfig() {
@@ -338,6 +347,7 @@ class MailConfigManager {
             GLib.source_remove(this.pollId);
             this.pollId = null;
         }
+
         if (this._timeoutIds) {
             for (let t of this._timeoutIds) {
                 if (t > 0) GLib.source_remove(t);
@@ -355,10 +365,10 @@ class MailConfigManager {
 }
 
 export function buildMailPage(settings, window) {
-    const page = new Adw.PreferencesPage({ 
-         title: 'Mail Sync', 
-         icon_name: 'mail-unread-symbolic' 
-     });
+    const page = new Adw.PreferencesPage({  
+        title: 'Mail Sync',  
+        icon_name: 'mail-unread-symbolic'  
+    });
 
     let manager = new MailConfigManager(page, settings);
     manager.startPolling();

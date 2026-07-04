@@ -6,16 +6,16 @@ import { runtime } from './runtime.js';
 
 function sendDaemonCommand(payloadObj, onMessage) {
     runtime.sendPayload(payloadObj, null, onMessage, 
-        () => { if (onMessage) onMessage({ status: 'error', message: 'Offline' }); },
+         () => { if (onMessage) onMessage({ status: 'error', message: 'Offline' }); },
         () => { if (onMessage) onMessage({ status: 'error', message: 'Offline' }); }
     );
 }
 
 export function buildIndexPage(settings, window) {
-    const page = new Adw.PreferencesPage({ 
-         title: 'Indexation', 
-         icon_name: 'folder-saved-search-symbolic' 
-     });
+    const page = new Adw.PreferencesPage({  
+        title: 'Indexation',  
+        icon_name: 'folder-saved-search-symbolic'  
+    });
 
     let isProcessing = false;
     let _timeoutIds = [];
@@ -28,8 +28,8 @@ export function buildIndexPage(settings, window) {
         _timeoutIds.push(id);
     };
 
-    const serviceGroup = new Adw.PreferencesGroup({ 
-         title: 'Background Service Management',
+    const serviceGroup = new Adw.PreferencesGroup({  
+        title: 'Background Service Management',
         description: 'Control the lifecycle of the local Lens for GNOME ingestion engine process.'
     });
 
@@ -68,6 +68,7 @@ export function buildIndexPage(settings, window) {
 
     const updateServiceUI = (silent = false) => {
         if (isProcessing) return; 
+
         if (!silent) {
             spinner.set_visible(true);
             spinner.start();
@@ -263,50 +264,65 @@ export function buildIndexPage(settings, window) {
         margin_end: 12,
         visible: false
     });
+
     const progressBar = new Gtk.ProgressBar({
         hexpand: true,
         valign: Gtk.Align.CENTER
     });
     progressBar.set_inverted(false);
-    progressBox.append(progressBar);
 
+    progressBox.append(progressBar);
     progressGroup.add(progressRow);
     progressGroup.add(progressBox);
     page.add(progressGroup);
 
-    let healthCheckId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
-        updateServiceUI(true);
-        
-        sendDaemonCommand({ action: 'get_indexer_status' }, (data) => {
-            if (data.status === 'indexer_status' && data.data) {
-                let state = data.data;
-                if (state.is_running) {
-                    progressBox.set_visible(true);
-                    
-                    let processed = state.deep_processed + state.shallow_processed;
-                    let total = state.total_files || 0;
-                    
-                    if (total > 0) {
-                        let fraction = processed / total;
-                        if (fraction > 1.0) fraction = 1.0;
-                        progressBar.set_fraction(fraction);
-                        progressRow.set_title(`Indexing: ${Math.round(fraction * 100)}%`);
-                        progressRow.set_subtitle(`Processed: ${processed} / ${total} (Deep: ${state.deep_processed}, Shallow: ${state.shallow_processed})`);
+    let healthCheckId = 0;
+    
+    const scheduleHealthCheck = (interval) => {
+        healthCheckId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, interval, () => {
+            healthCheckId = 0; // Clear it out so we know it fired
+            updateServiceUI(true);
+            
+            sendDaemonCommand({ action: 'get_indexer_status' }, (data) => {
+                let nextInterval = 5; // Default backoff interval when idle
+
+                if (data.status === 'indexer_status' && data.data) {
+                    let state = data.data;
+                    if (state.is_running) {
+                        nextInterval = 1; // Fast polling when actively indexing
+                        progressBox.set_visible(true);
+                        
+                        let processed = state.deep_processed + state.shallow_processed;
+                        let total = state.total_files || 0;
+                        
+                        if (total > 0) {
+                            let fraction = processed / total;
+                            if (fraction > 1.0) fraction = 1.0;
+                            progressBar.set_fraction(fraction);
+                            progressRow.set_title(`Indexing: ${Math.round(fraction * 100)}%`);
+                            progressRow.set_subtitle(`Processed: ${processed} / ${total} (Deep: ${state.deep_processed}, Shallow: ${state.shallow_processed})`);
+                        } else {
+                            progressBar.pulse();
+                            progressRow.set_title('Scanning Filesystem...');
+                            progressRow.set_subtitle('Calculating missing and modified files...');
+                        }
                     } else {
-                        progressBar.pulse();
-                        progressRow.set_title('Scanning Filesystem...');
-                        progressRow.set_subtitle('Calculating missing and modified files...');
+                        progressBox.set_visible(false);
+                        progressBar.set_fraction(0.0);
+                        progressRow.set_title('Idle');
+                        progressRow.set_subtitle('System is resting or listening for real-time changes.');
                     }
-                } else {
-                    progressBox.set_visible(false);
-                    progressBar.set_fraction(0.0);
-                    progressRow.set_title('Idle');
-                    progressRow.set_subtitle('System is resting or listening for real-time changes.');
                 }
-            }
+                
+                // Recursively schedule next poll
+                scheduleHealthCheck(nextInterval);
+            });
+            return GLib.SOURCE_REMOVE;
         });
-        return GLib.SOURCE_CONTINUE;
-    });
+    };
+
+    // Kick off first cycle
+    scheduleHealthCheck(1);
 
     const scopeGroup = new Adw.PreferencesGroup({ title: 'Indexing Scope' });
     
@@ -320,12 +336,12 @@ export function buildIndexPage(settings, window) {
     const depthRow = new Adw.SpinRow({
         title: 'Max Recursion Depth',
         subtitle: 'Requires a daemon restart to apply new kernel watches.',
-        adjustment: new Gtk.Adjustment({
-             lower: 1,
-             upper: 15,
-             step_increment: 1,
-             value: settings.get_int('index-max-depth')
-         })
+        adjustment: new Gtk.Adjustment({ 
+            lower: 1, 
+            upper: 15, 
+            step_increment: 1, 
+            value: settings.get_int('index-max-depth') 
+        })
     });
     settings.bind('index-max-depth', depthRow.adjustment, 'value', Gio.SettingsBindFlags.DEFAULT);
     
@@ -344,8 +360,8 @@ export function buildIndexPage(settings, window) {
     scopeGroup.add(depthRow);
     page.add(scopeGroup);
 
-    const pathGroup = new Adw.PreferencesGroup({ 
-         title: 'Specific Target Directories',
+    const pathGroup = new Adw.PreferencesGroup({  
+        title: 'Specific Target Directories',
         description: 'Directories to recursively index when Full Home Indexation is disabled.'
     });
     
@@ -412,22 +428,25 @@ export function buildIndexPage(settings, window) {
     
     addPathRow.add_suffix(addPathBtn);
     pathGroup.add(addPathRow);
+
     updatePaths();
 
     let fullSysChangedId = settings.connect('changed::index-full-system', () => {
         pathGroup.set_sensitive(!settings.get_boolean('index-full-system'));
         triggerDaemonRestart();
     });
+
     pathGroup.set_sensitive(!settings.get_boolean('index-full-system'));
     
     page.add(pathGroup);
 
-    const blacklistGroup = new Adw.PreferencesGroup({ 
-         title: 'Blacklisted Names',
+    const blacklistGroup = new Adw.PreferencesGroup({  
+        title: 'Blacklisted Names',
         description: 'Folder or file names that will be explicitly ignored during indexing (e.g. node_modules, .git).'
     });
     
     let blacklistRows = [];
+
     const updateBlacklist = () => {
         blacklistRows.forEach(row => blacklistGroup.remove(row));
         blacklistRows = [];
@@ -453,8 +472,8 @@ export function buildIndexPage(settings, window) {
         }
     };
 
-    const addBlacklistRow = new Adw.EntryRow({ 
-         title: 'Add new ignore rule...',
+    const addBlacklistRow = new Adw.EntryRow({  
+        title: 'Add new ignore rule...',
         show_apply_button: true 
     });
     addBlacklistRow.connect('apply', () => {
@@ -476,8 +495,8 @@ export function buildIndexPage(settings, window) {
     
     page.add(blacklistGroup);
 
-    const maintenanceGroup = new Adw.PreferencesGroup({ 
-         title: 'Database Maintenance',
+    const maintenanceGroup = new Adw.PreferencesGroup({  
+        title: 'Database Maintenance',
         description: 'Advanced options for managing the vector index.'
     });
 
@@ -525,7 +544,6 @@ export function buildIndexPage(settings, window) {
         title: 'Force Full Re-index',
         subtitle: 'Reset internal timestamps to force the background daemon to deep-scan all files again.'
     });
-
     const reindexBtn = new Gtk.Button({
         label: 'Re-index',
         valign: Gtk.Align.CENTER,
@@ -550,6 +568,7 @@ export function buildIndexPage(settings, window) {
 
     reindexRow.add_suffix(reindexBtn);
     maintenanceGroup.add(reindexRow);
+
     page.add(maintenanceGroup);
 
     updateServiceUI();
@@ -564,6 +583,7 @@ export function buildIndexPage(settings, window) {
             if (t > 0) GLib.source_remove(t);
         }
         _timeoutIds = [];
+        
         if (fullSysChangedId > 0) {
             settings.disconnect(fullSysChangedId);
             fullSysChangedId = 0;

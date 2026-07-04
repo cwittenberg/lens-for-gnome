@@ -43,7 +43,8 @@ impl GmailSyncDaemon {
         let secret_file = self.secret_file.clone();
 
         thread::spawn(move || {
-            let mut last_sync = std::time::Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or_else(std::time::Instant::now);
+            // Force first run immediately on boot (5 minutes = 300 seconds)
+            let mut last_sync = std::time::Instant::now().checked_sub(Duration::from_secs(305)).unwrap_or_else(std::time::Instant::now);
             let mut last_config_mtime = SystemTime::UNIX_EPOCH;
             let mut last_state_mtime = SystemTime::UNIX_EPOCH;
 
@@ -51,10 +52,12 @@ impl GmailSyncDaemon {
                 let current_config_mtime = fs::metadata(&config_path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
                 let current_state_mtime = fs::metadata(&state_file).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
 
-                // Instantly break the 60-second interval if the UI modified the config or requested a forced resync
+                // Instantly break the 5-minute interval if the UI modified the config or requested a forced resync
                 let force_sync = current_config_mtime > last_config_mtime || current_state_mtime > last_state_mtime;
 
-                if force_sync || last_sync.elapsed() >= Duration::from_secs(60) {
+                if force_sync || last_sync.elapsed() >= Duration::from_secs(300) {
+                    let mut has_backlog = false;
+
                     if let Ok(config_data) = fs::read_to_string(&config_path) {
                         if let Ok(config) = serde_json::from_str::<serde_json::Value>(&config_data) {
                             if let Some(raw_email) = config["email"].as_str() {
@@ -94,7 +97,6 @@ impl GmailSyncDaemon {
                                         }
                                     }
 
-                                    let mut has_backlog = false;
                                     match password_opt {
                                         Some(password) => {
                                             let clean_password: String = password.chars().filter(|c| !c.is_whitespace() && *c != '\r' && *c != '\n').collect();
@@ -105,11 +107,6 @@ impl GmailSyncDaemon {
                                             eprintln!("[Gmail Sync ERROR] Failed to retrieve password for '{}' from both Keyring and fallback.", email);
                                             Self::write_state(&state_file, 0, false, 0, 0, "Email password not found in GNOME Keyring or secure fallback file.", true, vec![]);
                                         }
-                                    }
-                                    
-                                    // Force immediate next tick by backdating the last_sync timer if there's a backlog
-                                    if has_backlog {
-                                        last_sync = std::time::Instant::now().checked_sub(Duration::from_secs(65)).unwrap_or_else(std::time::Instant::now);
                                     }
                                 }
                             } else {
@@ -134,10 +131,15 @@ impl GmailSyncDaemon {
                         Self::write_state(&state_file, 0, false, 0, 0, "Awaiting user configuration. App password must be added to keyring securely.", false, vec![]);
                     }
 
-                    // Update trackers *after* we've done our own file modifications so we don't infinitely re-trigger
-                    if last_sync.elapsed() < Duration::from_secs(60) {
+                    // Properly update the synchronization timer
+                    if has_backlog {
+                        // Force immediate next tick by backdating the last_sync timer if there's a backlog
+                        last_sync = std::time::Instant::now().checked_sub(Duration::from_secs(305)).unwrap_or_else(std::time::Instant::now);
+                    } else {
+                        // Reset timer so it waits the full 5 minutes before checking again
                         last_sync = std::time::Instant::now();
                     }
+
                     last_config_mtime = fs::metadata(&config_path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
                     last_state_mtime = fs::metadata(&state_file).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
                 }
