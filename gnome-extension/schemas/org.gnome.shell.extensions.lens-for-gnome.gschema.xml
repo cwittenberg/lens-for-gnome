@@ -6,6 +6,11 @@
       <summary>Toggle Lens for GNOME shortcut</summary>
       <description>Shortcut to toggle the Lens for GNOME search bar.</description>
     </key>
+    <key name="show-indicator" type="b">
+      <default>true</default>
+      <summary>Show System Tray Indicator</summary>
+      <description>Show the Lens for GNOME icon in the top panel.</description>
+    </key>
     <key name="select-text-on-focus" type="b">
       <default>true</default>
       <summary>Select Text on Open</summary>

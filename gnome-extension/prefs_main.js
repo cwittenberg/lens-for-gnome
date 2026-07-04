@@ -4,9 +4,9 @@ import Gtk from 'gi://Gtk';
 import Gdk from 'gi://Gdk';
 
 export function buildGeneralPage(settings, window) {
-    const page = new Adw.PreferencesPage({ 
-        title: 'General', 
-        icon_name: 'preferences-system-symbolic' 
+    const page = new Adw.PreferencesPage({
+        title: 'General',
+        icon_name: 'preferences-system-symbolic'
     });
     
     const shortcutGroup = new Adw.PreferencesGroup({ title: 'Activation Shortcut' });
@@ -35,7 +35,6 @@ export function buildGeneralPage(settings, window) {
         
         let mask = state & Gtk.accelerator_get_default_mod_mask();
         mask &= ~Gdk.ModifierType.LOCK_MASK;
-
         const isEscape = keyval === Gdk.KEY_Escape || keyval === 65307;
         const isBackspace = keyval === Gdk.KEY_BackSpace || keyval === 65288;
         
@@ -67,7 +66,6 @@ export function buildGeneralPage(settings, window) {
         if (isModifier) {
             return true; 
         }
-
         let accelName = Gtk.accelerator_name(keyval, mask);
         
         if (accelName && accelName.length > 0) {
@@ -95,11 +93,18 @@ export function buildGeneralPage(settings, window) {
     shortcutRow.add_suffix(shortcutButton);
     shortcutRow.set_activatable_widget(shortcutButton);
     shortcutGroup.add(shortcutRow);
-
     page.add(shortcutGroup);
 
-    const historyGroup = new Adw.PreferencesGroup({ title: 'Search History' });
+    const indicatorGroup = new Adw.PreferencesGroup({ title: 'System Tray' });
+    const indicatorSwitch = new Adw.SwitchRow({
+        title: 'Show System Tray Indicator',
+        subtitle: 'Show the Lens for GNOME icon in the top panel.',
+    });
+    settings.bind('show-indicator', indicatorSwitch, 'active', Gio.SettingsBindFlags.DEFAULT);
+    indicatorGroup.add(indicatorSwitch);
+    page.add(indicatorGroup);
 
+    const historyGroup = new Adw.PreferencesGroup({ title: 'Search History' });
     const historySwitch = new Adw.SwitchRow({
         title: 'Enable History',
         subtitle: 'Save recent searches for quick access in the tray context menu',

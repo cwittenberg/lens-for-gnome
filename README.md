@@ -1,103 +1,174 @@
 # Lens for GNOME
 
-**Lens for GNOME** indexes local files, extracts searchable text, runs local embeddings, handles OCR, syncs IMAP mail, and serves search results.
+**Lens for GNOME** is a local-first desktop search engine for GNOME.
 
-The goal is simple: fast desktop search with local-first AI-assisted processing.
+It indexes local files, extracts searchable text, watches folders for changes, runs local embeddings, supports OCR, syncs mail, and can use local GGUF language models through llama.cpp (such as those from HuggingFace).
 
-## What it does
+The goal is simple: fast, private desktop search that helps you find information inside your files without sending your documents to a remote service. Lens for GNOME is local-first.
 
-* Indexes files from configured folders
-* Watches folders for changes using inotify
-* Stores searchable content in SQLite
-* Supports exact text search through SQLite FTS5
-* Supports semantic search using local embeddings
-* Combines search results with Reciprocal Rank Fusion
-* Extracts text from documents, images, PDFs, mail, and videos
-* Runs local LLM queries through llama.cpp when enabled
-* Keeps data and models on the local machine
+## What Lens Does
+
+Lens turns content into a powerful searchable index on your computer.
+
+It can:
+
+- Index configured folders recursively.
+- Watch folders for changes using inotify.
+- Store searchable content in SQLite.
+- Search exact text using SQLite FTS5.
+- Search by meaning using local embeddings.
+- Merge keyword and semantic results with Reciprocal Rank Fusion.
+- Extract text from documents, images, PDFs, mail, and videos.
+- Run local LLM-powered queries when enabled.
+- Keep indexed data, embeddings, metadata, and models on your machine.
+- Fast preview videos or images on hover, multi-monitor capable.
+
+## Why Lens Exists
+
+Most desktop search tools are good at finding file names.
+
+Lens is built for finding information inside your files.
+
+You can search for exact words, ask more natural questions, or find related content even when the document does not use the same wording as your query.
+
+Example searches:
+
+```text
+meeting notes about renewable energy pricing
+```
+
+```text
+documents mentioning my lease termination date
+```
+
+```text
+emails with an IBAN from last year
+```
+
+```text
+invoices less than 300 usd
+```
+
+
+```text
+source files related to the indexing pipeline
+```
 
 ## Features
 
-### Hybrid search
+### Hybrid Search
 
-Lens combines regular full-text search with semantic vector search.
+Lens combines traditional full-text search with semantic search.
 
-* Exact keyword search: SQLite FTS5
-* Semantic search: local MiniLM embeddings through fastembed
-* Result merging: Reciprocal Rank Fusion
+Keyword search is fast and precise. Semantic search helps when you know what you are looking for, but not the exact words used in the document.
 
-This keeps normal searches fast while still allowing more natural queries.
+Lens uses:
 
-### Local LLM support
+| Capability | Technology |
+| --- | --- |
+| Exact search | SQLite FTS5 |
+| Semantic search | Local MiniLM embeddings through fastembed |
+| Result merging | Reciprocal Rank Fusion |
+| Local storage | SQLite |
 
-The daemon can run local GGUF models through llama.cpp.
+### Local LLM Support
 
-It can be used for:
-* Summarizing matching documents
-* Answering questions from indexed content
-* Routing natural-language queries
-* Handling more complex searches
+Lens can run local GGUF models through llama.cpp.
+
+When enabled, local models can help with:
+
+- Answering questions from indexed content.
+- Summarizing matching documents.
+- Routing natural-language queries.
+- Handling more complex search requests.
+- Turning vague searches into more useful retrieval steps.
 
 The model manager can download supported GGUF models and stores them locally.
 
-Hardware acceleration is detected when available, including:
-* CUDA
-* ROCm
-* Apple Silicon
-* Vulkan / other supported llama.cpp backends, depending on the build
+Hardware acceleration is detected when available, depending on the build and platform support. Supported backends may include:
 
-### File ingestion
+- CUDA
+- ROCm
+- Apple Silicon
+- Vulkan
+- Other llama.cpp-supported backends
 
-The daemon extracts text and metadata from:
+### File Ingestion
 
-* Plain text files
-* Source code
-* PDFs
-* Images
-* Office documents
-* Spreadsheets
-* Presentations
-* Videos
-* Local mail files
+Lens extracts text and metadata from common local content types, including:
 
-PDFs are read directly when embedded text is available. Scanned pages can fall back to OCR.
+- Plain text files
+- Source code
+- PDFs
+- Images
+- Office documents
+- Spreadsheets
+- Presentations
+- Videos
+- Local mail files
 
-Images are processed with OCR and QR-code extraction.
+PDFs with embedded text are read directly. Scanned pages can fall back to OCR.
 
 Videos are scanned for metadata and embedded subtitles through ffmpeg.
 
-### Mail indexing
+Images can be processed with OCR and QR-code extraction.
 
-The daemon can sync IMAP mail into local `.eml` files and index them like regular documents.
+### Mail Indexing
 
-This is used for local mail search without relying on a remote search API.
+Lens can sync IMAP mail into local `.eml` files and index them like regular documents.
 
-### Smart extraction
+This allows local mail search without relying on a remote mail provider search API.
 
-During indexing, Lens can detect useful structured values such as:
+Mail indexing is useful when you want the same search experience across files, documents, and email.
 
-* URLs
-* Email addresses
-* IP addresses
-* MAC addresses
-* IBANs
-* Dates
+### Smart Extraction
 
-These values are stored with the indexed content so they can be searched directly.
+During indexing, Lens can detect structured values and store them with the indexed content.
 
-### Fast-path plugins
+Supported extracted values include:
 
-Some queries skip the LLM and search pipeline completely.
+- URLs
+- Email addresses
+- IP addresses
+- MAC addresses
+- IBANs
+- Dates
 
-Current fast paths include:
+This makes it easier to search for specific technical, financial, or contact-related information.
 
-* Calculator queries
-* Desktop application launching
-* Filesystem browsing
+### Fast-Path Plugins
 
-This keeps simple actions instant.
+Some queries do not need the full search or LLM pipeline.
 
-## Dependencies
+Lens includes fast paths for simple actions, including:
+
+- Calculator queries
+- Desktop application launching
+- Filesystem browsing
+
+These are handled directly to keep common actions instant.
+
+## Privacy Model
+
+Lens is designed to be local-first.
+
+By default:
+
+- Document content is indexed locally.
+- Embeddings are created locally.
+- Search data is stored locally.
+- Models are stored locally.
+- No indexed document content is sent to an external AI service.
+
+Network access is only needed for features that explicitly require it, such as:
+
+- Downloading local models.
+- Syncing configured IMAP mail.
+- Accessing user-configured remote resources.
+
+## Installation and Setup
+
+### System Dependencies
 
 Install the required system tools first:
 
@@ -105,14 +176,14 @@ Install the required system tools first:
 sudo apt install tesseract-ocr ffmpeg poppler-utils curl
 ```
 
-Used by:
+| Dependency | Used For |
+| --- | --- |
+| `tesseract-ocr` | OCR for images and scanned PDFs |
+| `ffmpeg` / `ffprobe` | Video metadata, subtitles, and thumbnails |
+| `poppler-utils` | PDF rasterization for OCR through `pdftoppm` |
+| `curl` | Model downloads |
 
-* `tesseract-ocr`: OCR for images and scanned PDFs
-* `ffmpeg` / `ffprobe`: video metadata, subtitles, and thumbnails
-* `poppler-utils`: PDF rasterization for OCR through `pdftoppm`
-* `curl`: model downloads
-
-## Inotify watch limit
+### Increase the Inotify Watch Limit
 
 Large folders may hit the default Linux inotify watch limit.
 
@@ -123,11 +194,11 @@ echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## Building from source
+## Building from Source
 
 Install Rust and Cargo first.
 
-Then build the daemon:
+Then build Lens:
 
 ```bash
 git clone https://github.com/cwittenberg/gnome-lens.git
@@ -135,13 +206,13 @@ cd gnome-lens
 cargo build --release
 ```
 
-The release binary is created at:
+The release binary is created here:
 
-```bash
+```text
 target/release/gnome-lens
 ```
 
-## Running
+## Running Lens
 
 Start the daemon manually:
 
@@ -151,60 +222,83 @@ Start the daemon manually:
 
 The GNOME extension can also manage the daemon automatically.
 
-## Manual indexing
+## Command-Line Usage
 
-Index a folder recursively:
+### Index a Folder
 
 ```bash
 ./target/release/gnome-lens index /path/to/folder
 ```
 
-Force a full reindex:
+### Force a Full Reindex
 
 ```bash
 ./target/release/gnome-lens reindex /path/to/folder
 ```
 
-## Querying from the command line
-
-Send a query to the running daemon:
+### Query the Running Daemon
 
 ```bash
 ./target/release/gnome-lens "what are the terms of my apartment lease?"
 ```
 
-## Runtime paths
+## Architecture
 
-The daemon uses the following local paths by default.
+Lens runs as a local daemon and exposes search functionality to the GNOME desktop integration.
 
-### IPC socket
+At a high level, the system contains:
 
-```bash
-~/.local/state/gnome-lens/gnome_lens.sock
-```
+| Component | Purpose |
+| --- | --- |
+| File watcher | Tracks filesystem changes using inotify |
+| Ingestion pipeline | Extracts text, metadata, and structured values |
+| Search index | Stores searchable text in SQLite FTS5 |
+| Embedding pipeline | Creates local semantic vectors |
+| Ranking layer | Merges exact and semantic results |
+| Model manager | Handles local GGUF model downloads and paths |
+| LLM runtime | Runs local llama.cpp queries when enabled |
+| IPC layer | Serves requests from the desktop integration |
 
-### Configuration
+## Runtime Paths
 
-```bash
-~/.config/gnome-lens/
-```
+Lens stores its local state under standard user directories.
 
-### Database and models
+| Component | Default Path |
+| --- | --- |
+| IPC socket | `~/.local/state/gnome-lens/gnome_lens.sock` |
+| Configuration | `~/.config/gnome-lens/` |
+| Database, models, and local data | `~/.local/share/gnome-lens/` |
 
-```bash
-~/.local/share/gnome-lens/
-```
-
-When running inside Flatpak, the daemon uses the matching Flatpak/XDG paths instead.
+When running inside Flatpak, Lens uses the matching Flatpak and XDG paths instead.
 
 ## Storage
 
-Lens stores its index, embeddings, model files, and extracted metadata locally.
+Lens stores the following locally:
+
+- Search index
+- Extracted text
+- Extracted metadata
+- Embeddings
+- Model files
+- Local mail cache, when IMAP sync is configured
 
 No document content is sent to an external service by default.
 
-Network access is only needed for features that explicitly require it, such as downloading models or syncing configured IMAP mail.
+## Project Status
+
+Lens for GNOME is under active development.
+
+The project is focused on:
+
+- Fast local indexing.
+- Reliable folder watching.
+- Strong GNOME desktop integration.
+- Useful local AI-assisted search.
+- Private-by-default behavior.
+- Practical performance on normal desktop hardware.
 
 ## License
 
-MIT License
+This project is licensed under the GNU General Public License v3.0.
+
+See the `LICENSE` file for details.

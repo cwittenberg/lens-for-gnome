@@ -7,7 +7,6 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import * as Dialog from 'resource:///org/gnome/shell/ui/dialog.js';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
-
 import { GnomeLensUI } from './ui.js';
 import { GnomeLensIndicator } from './indicator.js';
 import { checkDaemon, checkDependencies, getDaemonInstallCommand, getDistributionInstructions } from './dependencies.js';
@@ -18,7 +17,7 @@ class SetupRequirementsDialog extends ModalDialog.ModalDialog {
         super._init({ styleClass: 'lens-setup-dialog' });
 
         let content = new Dialog.MessageDialogContent({
-            title: 'Lens for GNOME — Environment Setup',
+            title: 'Lens for GNOME   Environment Setup',
             description: 'To enable full functionality, local semantic processing, and rich media previews, please complete the configuration steps detailed below.'
         });
         this.contentLayout.add_child(content);
@@ -59,6 +58,7 @@ class SetupRequirementsDialog extends ModalDialog.ModalDialog {
                 daemonCopyBtn.set_label('Copied!');
             }, this);
             daemonBox.add_child(daemonCopyBtn);
+
             this.contentLayout.add_child(daemonBox);
 
             let daemonNoteLabel = new St.Label({
@@ -103,6 +103,7 @@ class SetupRequirementsDialog extends ModalDialog.ModalDialog {
                 depsCopyBtn.set_label('Copied!');
             }, this);
             depsBox.add_child(depsCopyBtn);
+
             this.contentLayout.add_child(depsBox);
 
             let noteLabel = new St.Label({
@@ -131,8 +132,13 @@ export default class GnomeLensExtension extends Extension {
 
         Main.panel.addToStatusArea('lens-for-gnome', this._indicator);
 
-        this._settings.connectObject('changed::shortcut', this._bindShortcut.bind(this), this);
+        this._settings.connectObject(
+            'changed::shortcut', this._bindShortcut.bind(this),
+            'changed::show-indicator', this._updateIndicatorVisibility.bind(this),
+            this
+        );
         this._bindShortcut();
+        this._updateIndicatorVisibility();
     }
 
     disable() {
@@ -168,6 +174,12 @@ export default class GnomeLensExtension extends Extension {
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
             this.toggleLens.bind(this)
         );
+    }
+    
+    _updateIndicatorVisibility() {
+        if (this._indicator) {
+            this._indicator.visible = this._settings.get_boolean('show-indicator');
+        }
     }
 
     _checkRequirements() {
@@ -210,9 +222,11 @@ export default class GnomeLensExtension extends Extension {
         if (!this._ui) {
             this._ui = new GnomeLensUI(this._settings, this);
         }
+
         if (!this._ui.isOpen) {
             this._ui.open();
         }
+
         this._ui.setQuery(query);
     }
 
