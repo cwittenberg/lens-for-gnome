@@ -133,8 +133,8 @@ export default class GnomeLensExtension extends Extension {
         Main.panel.addToStatusArea('lens-for-gnome', this._indicator);
 
         this._settings.connectObject(
-            'changed::shortcut', this._bindShortcut.bind(this),
-            'changed::show-indicator', this._updateIndicatorVisibility.bind(this),
+            'changed::shortcut', () => this._bindShortcut(),
+            'changed::show-indicator', () => this._updateIndicatorVisibility(),
             this
         );
         this._bindShortcut();
@@ -172,7 +172,7 @@ export default class GnomeLensExtension extends Extension {
             this._settings,
             Meta.KeyBindingFlags.NONE,
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
-            this.toggleLens.bind(this)
+            () => this.toggleLens()
         );
     }
     

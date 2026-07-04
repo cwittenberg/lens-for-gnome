@@ -3,18 +3,9 @@ import { runtime } from './runtime.js';
 
 export function checkDependencies() {
     let hasFfmpeg = GLib.find_program_in_path('ffmpeg') !== null;
-    let hasGst = false;
-    let hasCogl = false;
+    let hasGst = GLib.find_program_in_path('gst-inspect-1.0') !== null || GLib.find_program_in_path('gst-launch-1.0') !== null;
 
-    try {
-        hasGst = !!imports.gi.Gst && !!imports.gi.GstApp;
-    } catch (e) {}
-
-    try {
-        hasCogl = !!imports.gi.Cogl;
-    } catch (e) {}
-
-    return hasFfmpeg && hasGst && hasCogl;
+    return hasFfmpeg && hasGst;
 }
 
 export function checkDaemon() {

@@ -54,14 +54,14 @@ export const GnomeLensUI = GObject.registerClass({
             return Clutter.EVENT_STOP;
         }, this);
         
-        Main.layoutManager.connectObject('monitors-changed', this._onMonitorsChanged.bind(this), this);
+        Main.layoutManager.connectObject('monitors-changed', () => this._onMonitorsChanged(), this);
         
         this._settings.connectObject(
-            'changed::ui-color', this._applyStyles.bind(this),
-            'changed::ui-transparency', this._applyStyles.bind(this),
-            'changed::ui-shadow', this._applyStyles.bind(this),
-            'changed::ui-theme-path', this._applyTheme.bind(this),
-            'changed::show-backdrop', this._applyBackdrop.bind(this),
+            'changed::ui-color', () => this._applyStyles(),
+            'changed::ui-transparency', () => this._applyStyles(),
+            'changed::ui-shadow', () => this._applyStyles(),
+            'changed::ui-theme-path', () => this._applyTheme(),
+            'changed::show-backdrop', () => this._applyBackdrop(),
             'changed::show-document-text', () => {
                 if (this._lastResults && this._lastResults.length > 0) {
                     this._resultsList.renderResults(this._lastResults, this._activeFilter);
@@ -509,7 +509,7 @@ export const GnomeLensUI = GObject.registerClass({
 
     _connectStageCapture() {
         if (this._stageCaptureConnected) return;
-        global.stage.connectObject('captured-event', this._onCapturedEvent.bind(this), this);
+        global.stage.connectObject('captured-event', (actor, event) => this._onCapturedEvent(actor, event), this);
         this._stageCaptureConnected = true;
     }
 
@@ -711,14 +711,14 @@ export const GnomeLensUI = GObject.registerClass({
                             try {
                                 Gio.AppInfo.launch_default_for_uri_finish(res);
                             } catch (e) {
-                                console.warn(`[Lens for GNOME] Native async launch failed: ${e}`);
+                                console.debug(`[Lens for GNOME] Native async launch failed: ${e.message}`);
                             }
                         }
                     );
                 }
             },
-            onError: (e) => console.warn(`[Lens for GNOME] Launch IPC error: ${e}`),
-            onOffline: () => console.warn(`[Lens for GNOME] Daemon offline during launch.`)
+            onError: (e) => console.debug(`[Lens for GNOME] Launch IPC error: ${e.message}`),
+            onOffline: () => console.debug(`[Lens for GNOME] Daemon offline during launch.`)
         };
 
         let launchService = new ServiceClient();

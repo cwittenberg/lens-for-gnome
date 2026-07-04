@@ -221,7 +221,11 @@ class GnomeLensResultsList extends St.ScrollView {
         
         let parent = targetFile.get_parent();
         if (!parent.query_exists(null)) {
-            try { parent.make_directory_with_parents(null); } catch(e) {}
+            try { 
+                parent.make_directory_with_parents(null); 
+            } catch(e) {
+                console.debug(`[Lens for GNOME] Thumb cache dir build error: ${e.message}`);
+            }
         }
 
         let monitor;
@@ -242,7 +246,9 @@ class GnomeLensResultsList extends St.ScrollView {
                     iconActor.set_icon_size(32);
                     iconActor.add_style_class_name('lens-result-preview');
                     iconActor.remove_style_class_name('lens-result-icon');
-                } catch (e) {}
+                } catch (e) {
+                    console.debug(`[Lens for GNOME] Could not set thumbnail: ${e.message}`);
+                }
                 monitor.cancel();
             }
         };
@@ -261,7 +267,9 @@ class GnomeLensResultsList extends St.ScrollView {
                 iconActor.set_icon_size(32);
                 iconActor.add_style_class_name('lens-result-preview');
                 iconActor.remove_style_class_name('lens-result-icon');
-            } catch (e) {}
+            } catch (e) {
+                console.debug(`[Lens for GNOME] Original file thumb fallback failed: ${e.message}`);
+            }
         }
     }
 
@@ -310,7 +318,6 @@ class GnomeLensResultsList extends St.ScrollView {
     _onScroll() {
         let adj = this.vscroll ? this.vscroll.adjustment : this.vadjustment;
         if (!adj) return;
-        // Fix: Use version-safe bounds verification to fire infinite chunk calculations smoothly
         if (adj.value >= adj.upper - adj.page_size - 150) {
             this._renderNextChunk();
         }
@@ -397,8 +404,7 @@ class GnomeLensResultsList extends St.ScrollView {
         if (!this._scrollConnected) {
             let adj = this.vscroll ? this.vscroll.adjustment : this.vadjustment;
             if (adj) {
-                // Fix: Hook property listener to 'notify::value' because St.Adjustment doesn't emit 'value-changed' natively in GNOME Shell
-                adj.connectObject('notify::value', this._onScroll.bind(this), this);
+                adj.connectObject('notify::value', () => this._onScroll(), this);
                 this._scrollConnected = true;
             }
         }
@@ -726,11 +732,11 @@ class GnomeLensResultsList extends St.ScrollView {
                                                 pillBox.show();
                                                 it.close_async(GLib.PRIORITY_LOW, null, () => {});
                                             }
-                                        } catch(e) { }
+                                        } catch(e) { console.debug(`[Lens for GNOME] File batch iteration ignored: ${e.message}`); }
                                     });
                                 };
                                 nextBatch();
-                            } catch (e) { }
+                            } catch (e) { console.debug(`[Lens for GNOME] Folder enumeration failed: ${e.message}`); }
                         }
                     );
                 } else {
@@ -755,7 +761,7 @@ class GnomeLensResultsList extends St.ScrollView {
                                 let sizeStr = (s < 10 && x > 0 ? s.toFixed(1) : Math.round(s)) + ' ' + sizes[x];
                                 pillLabel.set_text(`${sizeStr}`);
                                 pillBox.show();
-                            } catch (e) { }
+                            } catch (e) { console.debug(`[Lens for GNOME] Could not query filesize: ${e.message}`); }
                         }
                     );
                 }

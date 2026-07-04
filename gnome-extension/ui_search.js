@@ -24,8 +24,8 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         });
         
         this._dirEntry = this._createInput('folder-symbolic', 'Directory (e.g. ~/Docs)');
-        this._dirEntry.clutter_text.connectObject('key-press-event', this._onDirKeyPress.bind(this), this);
-        this._dirEntry.clutter_text.connectObject('text-changed', this._onDirTextChanged.bind(this), this);
+        this._dirEntry.clutter_text.connectObject('key-press-event', (actor, event) => this._onDirKeyPress(actor, event), this);
+        this._dirEntry.clutter_text.connectObject('text-changed', () => this._onDirTextChanged(), this);
         
         this._extEntry = this._createInput('text-x-generic-symbolic', 'Extension (e.g. pdf)');
         
@@ -206,10 +206,10 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
                         try {
                             let iter = pObj.enumerate_children_finish(pRes);
                             this._fetchSuggestions(iter, text, prefix);
-                        } catch (e) { }
+                        } catch (e) { console.debug(`[Lens for GNOME] Dir suggestion list fail: ${e.message}`); }
                     }
                 );
-            } catch (e) { }
+            } catch (e) { console.debug(`[Lens for GNOME] Dir query filter info ignore: ${e.message}`); }
         });
     }
 
@@ -252,7 +252,7 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
                     this._autocompleteActive = true;
                     this._isClearing = false;
                 }
-            } catch (e) { }
+            } catch (e) { console.debug(`[Lens for GNOME] Suggester async extraction fault: ${e.message}`); }
         });
     }
 
@@ -389,8 +389,8 @@ class GnomeLensSearchBar extends St.BoxLayout {
             y_align: Clutter.ActorAlign.CENTER,
             can_focus: true,
         });
-        this._entry.clutter_text.connectObject('text-changed', this._onTextChanged.bind(this), this);
-        this._entry.clutter_text.connectObject('key-press-event', this._onKeyPress.bind(this), this);
+        this._entry.clutter_text.connectObject('text-changed', () => this._onTextChanged(), this);
+        this._entry.clutter_text.connectObject('key-press-event', (actor, event) => this._onKeyPress(actor, event), this);
         this.add_child(this._entry);
 
         this._countLabel = new St.Label({
@@ -447,7 +447,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
         }, this);
         this.add_child(this._closeButton);
 
-        this._settings.connectObject('changed::search-history', this._updateBackButtonVisibility.bind(this), this);
+        this._settings.connectObject('changed::search-history', () => this._updateBackButtonVisibility(), this);
         this._updateBackButtonVisibility();
     }
 
@@ -551,11 +551,11 @@ class GnomeLensSearchBar extends St.BoxLayout {
                                             try {
                                                 let iter = pObj.enumerate_children_finish(pRes);
                                                 this._fetchSuggestions(iter, text, prefix, tokenStartIdx);
-                                            } catch (e) { }
+                                            } catch (e) { console.debug(`[Lens for GNOME] Parent iter gen failed: ${e.message}`); }
                                         }
                                     );
                                 }
-                            } catch (e) { }
+                            } catch (e) { console.debug(`[Lens for GNOME] Deep dir info fetch skip: ${e.message}`); }
                         });
                     }
                 }
@@ -638,7 +638,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
                     this._updateButtonVisibility(newText);
                 }
-            } catch (e) { }
+            } catch (e) { console.debug(`[Lens for GNOME] Root search suggestion extraction error: ${e.message}`); }
         });
     }
 

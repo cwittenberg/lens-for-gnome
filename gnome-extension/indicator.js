@@ -36,10 +36,10 @@ export const GnomeLensIndicator = GObject.registerClass(
 
             this._buildMenu();
 
-            this._settings.connectObject('changed::search-history', this._buildMenu.bind(this), this);
-            this._settings.connectObject('changed::enable-history', this._buildMenu.bind(this), this);
+            this._settings.connectObject('changed::search-history', () => this._buildMenu(), this);
+            this._settings.connectObject('changed::enable-history', () => this._buildMenu(), this);
 
-            this.connectObject('captured-event', this._onCapturedEvent.bind(this), this);
+            this.connectObject('captured-event', (actor, event) => this._onCapturedEvent(actor, event), this);
             
             this.menu.connectObject('open-state-changed', (menu, isOpen) => {
                 if (isOpen) {

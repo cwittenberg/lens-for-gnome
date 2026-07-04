@@ -33,7 +33,7 @@ function ensureHistoryLoaded() {
                     }
                 }
             } catch (e) {
-                console.warn(`[Lens for GNOME] Failed to parse playback history: ${e}`);
+                console.warn(`[Lens for GNOME] Failed to parse playback history: ${e.message}`);
             }
             resolve();
         });
@@ -63,7 +63,7 @@ function savePlaybackHistoryAsync() {
             try {
                 f.replace_contents_finish(res);
             } catch(e) {
-                console.warn(`[Lens for GNOME] Failed to write playback history to disk: ${e}`);
+                console.warn(`[Lens for GNOME] Failed to write playback history to disk: ${e.message}`);
             }
         }
     );
@@ -339,7 +339,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             return Clutter.EVENT_PROPAGATE;
         }, this);
 
-        this.connectObject('destroy', this._onDestroy.bind(this), this);
+        this.connectObject('destroy', () => this._onDestroy(), this);
 
         this._resetHideTimer();
         
@@ -501,7 +501,9 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         if (this._lastTempFile) {
             let file = Gio.File.new_for_path(this._lastTempFile);
             if (file.query_exists(null)) {
-                try { file.delete(null); } catch (e) { }
+                try { 
+                    file.delete(null); 
+                } catch (e) { console.debug(`[Lens for GNOME] Garbage collection temp failed: ${e.message}`); }
             }
             this._lastTempFile = null;
         }
@@ -586,7 +588,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                     } else {
                         sample = this._sink.emit('try-pull-sample', 0);
                     }
-                } catch (e) { }
+                } catch (e) { console.debug(`[Lens for GNOME] Frame sample extraction blocked: ${e.message}`); }
                 
                 if (sample) {
                     if (this._idleRenderId === 0) {
@@ -655,7 +657,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                     if (global.stage && global.stage.context) {
                         coglCtx = global.stage.context.get_backend().get_cogl_context();
                     }
-                } catch(e) {}
+                } catch(e) { console.debug(`[Lens for GNOME] Cogl stage context derivation error: ${e.message}`); }
 
                 if (coglCtx) {
                     try {
@@ -666,7 +668,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                 } else {
                     bytesSuccess = this._imageContent.set_bytes(glibBytes, pixelFormat, width, height, width * 4);
                 }
-            } catch (err) { }
+            } catch (err) { console.debug(`[Lens for GNOME] Cogl rendering error: ${err.message}`); }
             
             if (bytesSuccess) {
                 this._imageActor.queue_redraw();
@@ -694,14 +696,17 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             this._proc = proc;
 
             proc.wait_async(null, (p, res) => {
-                try { proc.wait_finish(res); } catch(e) {}
+                try { 
+                    proc.wait_finish(res); 
+                } catch(e) { console.debug(`[Lens for GNOME] ffmpeg extraction subprocess terminated: ${e.message}`); }
+                
                 if (this._proc !== proc) return;
                 this._proc = null;
 
                 let file = Gio.File.new_for_path(tempFile);
                 if (file.query_exists(null)) {
                     if (!this.visible) {
-                        try { file.delete(null); } catch(e) {}
+                        try { file.delete(null); } catch(e) { console.debug(`[Lens for GNOME] Failed removing stale preview map: ${e.message}`); }
                         return;
                     }
 
@@ -711,7 +716,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                     if (this._lastTempFile) {
                         let lastFile = Gio.File.new_for_path(this._lastTempFile);
                         if (lastFile.query_exists(null)) {
-                            try { lastFile.delete(null); } catch(e) {}
+                            try { lastFile.delete(null); } catch(e) { console.debug(`[Lens for GNOME] Failed cleaning old frame buffer: ${e.message}`); }
                         }
                     }
                     this._lastTempFile = tempFile;

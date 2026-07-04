@@ -1,17 +1,12 @@
 import GLib from 'gi://GLib';
+import GIRepository from 'gi://GIRepository';
 
 export function checkDependencies() {
     let hasFfmpeg = GLib.find_program_in_path('ffmpeg') !== null;
-    let hasGst = false;
-    let hasCogl = false;
-
-    try {
-        hasGst = !!imports.gi.Gst && !!imports.gi.GstApp;
-    } catch (e) {}
-
-    try {
-        hasCogl = !!imports.gi.Cogl;
-    } catch (e) {}
+    let repo = GIRepository.Repository.get_default();
+    
+    let hasGst = repo.enumerate_versions('Gst').length > 0 && repo.enumerate_versions('GstApp').length > 0;
+    let hasCogl = repo.enumerate_versions('Cogl').length > 0;
 
     return hasFfmpeg && hasGst && hasCogl;
 }
