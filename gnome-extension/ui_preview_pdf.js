@@ -71,14 +71,17 @@ export const GnomeLensPdfPreview = GObject.registerClass({
         header.add_child(title);
 
         let openBtn = new St.Button({
-            child: new St.Icon({ icon_name: 'document-open-symbolic', icon_size: 16 }),
-            style: 'background-color: rgba(255, 255, 255, 0.15); border-radius: 4px; padding: 6px;',
-            y_align: Clutter.ActorAlign.CENTER
+            child: new St.Icon({ icon_name: 'external-link-symbolic', icon_size: 16 }),
+            style_class: 'lens-result-action-btn',
+            y_align: Clutter.ActorAlign.CENTER,
+            reactive: true,
+            can_focus: true
         });
         
-        openBtn.connectObject('clicked', () => {
+        openBtn.connectObject('button-press-event', () => {
             let file = Gio.File.new_for_path(this._filepath);
             Gio.AppInfo.launch_default_for_uri_async(file.get_uri(), null, null, null);
+            return Clutter.EVENT_STOP;
         }, this);
         header.add_child(openBtn);
 
@@ -168,8 +171,6 @@ export const GnomeLensPdfPreview = GObject.registerClass({
             let pageFile = GLib.build_filenamev([GLib.get_tmp_dir(), name]);
             this._tempFiles.push(pageFile);
 
-            // Reverted back to hardcoded dimensions which are strictly reliable and 
-            // do not cause the widget initialization to fail/crash before rendering.
             let pageWidget = new St.Widget({
                 style: `background-image: url("file://${pageFile}"); background-size: contain; background-repeat: no-repeat; background-position: center; background-color: #ffffff; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 24px;`,
                 width: 700,

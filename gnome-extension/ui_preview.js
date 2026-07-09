@@ -27,7 +27,6 @@ export const GnomeLensPreview = GObject.registerClass({
         this._filepath = null;
         this._type = null;
         this._activeStrategy = null;
-        this._lastClickTime = 0;
 
         let w = this._settings.get_int('preview-w');
         let h = this._settings.get_int('preview-h');
@@ -116,16 +115,6 @@ export const GnomeLensPreview = GObject.registerClass({
                         break;
                     }
                     current = current.get_parent();
-                }
-
-                if (!isControl) {
-                    let clickTime = event.get_time();
-                    if (clickTime - this._lastClickTime < 250) {
-                        this.toggleFullscreen();
-                        this._lastClickTime = 0;
-                        return Clutter.EVENT_STOP;
-                    }
-                    this._lastClickTime = clickTime;
                 }
 
                 if (!isControl && !this.isFullscreen) {

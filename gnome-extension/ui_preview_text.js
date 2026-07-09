@@ -83,13 +83,21 @@ export const GnomeLensTextPreview = GObject.registerClass({
         });
         header.add_child(title);
 
-        let copyBtn = new St.Button({
-            child: new St.Icon({ icon_name: 'edit-copy-symbolic', icon_size: 16 }),
-            style_class: 'lens-video-control-btn', 
+        let controlsBox = new St.BoxLayout({
+            vertical: false,
+            style: 'spacing: 8px;',
             y_align: Clutter.ActorAlign.CENTER
         });
+
+        let copyBtn = new St.Button({
+            child: new St.Icon({ icon_name: 'edit-copy-symbolic', icon_size: 16 }),
+            style_class: 'lens-result-action-btn', 
+            y_align: Clutter.ActorAlign.CENTER,
+            reactive: true,
+            can_focus: true
+        });
         
-        copyBtn.connectObject('clicked', () => {
+        copyBtn.connectObject('button-press-event', () => {
             if (this._textContent) {
                 let clipboard = St.Clipboard.get_default();
                 clipboard.set_text(St.ClipboardType.CLIPBOARD, this._textContent);
@@ -108,9 +116,26 @@ export const GnomeLensTextPreview = GObject.registerClass({
                     return GLib.SOURCE_REMOVE;
                 });
             }
+            return Clutter.EVENT_STOP;
         }, this);
+        controlsBox.add_child(copyBtn);
+
+        let openBtn = new St.Button({
+            child: new St.Icon({ icon_name: 'external-link-symbolic', icon_size: 16 }),
+            style_class: 'lens-result-action-btn', 
+            y_align: Clutter.ActorAlign.CENTER,
+            reactive: true,
+            can_focus: true
+        });
         
-        header.add_child(copyBtn);
+        openBtn.connectObject('button-press-event', () => {
+            let file = Gio.File.new_for_path(this._filepath);
+            Gio.AppInfo.launch_default_for_uri_async(file.get_uri(), null, null, null);
+            return Clutter.EVENT_STOP;
+        }, this);
+        controlsBox.add_child(openBtn);
+        
+        header.add_child(controlsBox);
         this.add_child(header);
     }
 

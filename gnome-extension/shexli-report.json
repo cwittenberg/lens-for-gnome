@@ -27,7 +27,7 @@
         },
         {
           "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip:ui_preview_text.js",
-          "line": 94,
+          "line": 102,
           "snippet": "St.Clipboard.get_default()"
         }
       ],
