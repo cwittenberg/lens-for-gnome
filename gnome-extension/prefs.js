@@ -9,7 +9,7 @@ import { buildAboutPage } from './prefs_about.js';
 
 export default class GnomeLensPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        const settings = this.getSettings('org.gnome.shell.extensions.lens-for-gnome');
+        const settings = this.getSettings();
         
         window.add(buildGeneralPage(settings, window));    
         window.add(buildLookAndFeelPage(settings, window, this));

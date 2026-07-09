@@ -124,7 +124,7 @@ class SetupRequirementsDialog extends ModalDialog.ModalDialog {
 
 export default class GnomeLensExtension extends Extension {
     enable() {
-        this._settings = this.getSettings('org.gnome.shell.extensions.lens-for-gnome');
+        this._settings = this.getSettings();
         this._ui = null;
         this._indicator = new GnomeLensIndicator(this, this._settings);
         this._setupDialog = null;

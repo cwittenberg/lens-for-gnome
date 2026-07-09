@@ -4,8 +4,8 @@ import St from 'gi://St';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Gst from 'gi://Gst';
 
-let Gst = null;
 let GstLoaded = false;
 let GstLoadFailed = false;
 
@@ -68,10 +68,9 @@ async function ensureGst() {
     if (GstLoaded) return true;
     if (GstLoadFailed) return false;
     try {
-        let gi = await import('gi://Gst');
-        Gst = gi.default;
-        Gst.init(null);
-        await import('gi://GstApp');
+        if (!Gst.is_initialized()) {
+            Gst.init(null);
+        }
         GstLoaded = true;
         return true;
     } catch (e) {
@@ -292,7 +291,8 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         this._isSeeking = false;
         this._targetSeekNs = 0;
 
-        this._playbackTimerId = 0;
+        this._gstPlaybackTimerId = 0;
+        this._fallbackPlaybackTimerId = 0;
         this._idleRenderId = 0;
         this._hideTimerId = 0;
         
@@ -452,7 +452,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
     }
 
     _updateHUD() {
-        if (this._controlsHUD && typeof this._controlsHUD.updateUIState === 'function') {
+        if (this._controlsHUD) {
             this._controlsHUD.updateUIState(this._currentTimeNs, this._durationNs, this._volumeLevel, this._isMuted);
         }
     }
@@ -468,9 +468,13 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             GLib.source_remove(this._hideTimerId);
             this._hideTimerId = 0;
         }
-        if (this._playbackTimerId > 0) {
-            GLib.source_remove(this._playbackTimerId);
-            this._playbackTimerId = 0;
+        if (this._gstPlaybackTimerId > 0) {
+            GLib.source_remove(this._gstPlaybackTimerId);
+            this._gstPlaybackTimerId = 0;
+        }
+        if (this._fallbackPlaybackTimerId > 0) {
+            GLib.source_remove(this._fallbackPlaybackTimerId);
+            this._fallbackPlaybackTimerId = 0;
         }
         if (this._idleRenderId > 0) {
             GLib.source_remove(this._idleRenderId);
@@ -564,7 +568,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                 throw new Error("Pipeline set_state failure");
             }
 
-            this._playbackTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            this._gstPlaybackTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
                 if (!this._sink || !this.visible || !this._pipeline) return GLib.SOURCE_CONTINUE;
                 
                 if (this._hasRestoredPosition) {
@@ -577,11 +581,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
 
                 let sample = null;
                 try {
-                    if (typeof this._sink.try_pull_sample === 'function') {
-                        sample = this._sink.try_pull_sample(0);
-                    } else {
-                        sample = this._sink.emit('try-pull-sample', 0);
-                    }
+                    sample = this._sink.emit('try-pull-sample', 0);
                 } catch (e) { console.debug(`[Lens for GNOME] Frame sample extraction blocked: ${e.message}`); }
                 
                 if (sample) {
@@ -632,11 +632,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             let data = mapInfo.data;
 
             if (!this._imageContent || this._contentWidth !== width || this._contentHeight !== height) {
-                if (typeof St.ImageContent.new_with_preferred_size === 'function') {
-                    this._imageContent = St.ImageContent.new_with_preferred_size(width, height);
-                } else {
-                    this._imageContent = new St.ImageContent();
-                }
+                this._imageContent = St.ImageContent.new_with_preferred_size(width, height);
                 this._contentWidth = width;
                 this._contentHeight = height;
                 this._imageActor.set_content(this._imageContent);
@@ -673,9 +669,9 @@ export const GnomeLensVideoPreview = GObject.registerClass({
     }
 
     _extractFrameAndScheduleNext(isScrubbing = false) {
-        if (this._playbackTimerId > 0) {
-            GLib.source_remove(this._playbackTimerId);
-            this._playbackTimerId = 0;
+        if (this._fallbackPlaybackTimerId > 0) {
+            GLib.source_remove(this._fallbackPlaybackTimerId);
+            this._fallbackPlaybackTimerId = 0;
         }
 
         if (this._proc) {
@@ -726,8 +722,8 @@ export const GnomeLensVideoPreview = GObject.registerClass({
 
                     this._updateHUD();
 
-                    this._playbackTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-                        this._playbackTimerId = 0;
+                    this._fallbackPlaybackTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                        this._fallbackPlaybackTimerId = 0;
                         this._currentTimeNs += 1000000000;
                         this._extractFrameAndScheduleNext();
                         return GLib.SOURCE_REMOVE;

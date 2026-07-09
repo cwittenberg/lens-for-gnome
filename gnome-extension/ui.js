@@ -782,7 +782,7 @@ export const GnomeLensUI = GObject.registerClass({
         this._activeFilter = 'All';     
         this._updateFilterPills([]);
         
-        if (this._resultsList && typeof this._resultsList.clearSelection === 'function') {
+        if (this._resultsList) {
             this._resultsList.clearSelection();
         }
         

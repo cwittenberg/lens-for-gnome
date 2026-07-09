@@ -179,4 +179,20 @@ class RuntimeAdapter {
     }
 }
 
-export const runtime = new RuntimeAdapter();
+let _runtimeInstance = null;
+function getRuntime() {
+    if (!_runtimeInstance) {
+        _runtimeInstance = new RuntimeAdapter();
+    }
+    return _runtimeInstance;
+}
+
+export const runtime = {
+    isSnap() { return getRuntime().isSnap(); },
+    connectAsync(cancellable, callback) { return getRuntime().connectAsync(cancellable, callback); },
+    getConfigPath(filename) { return getRuntime().getConfigPath(filename); },
+    getDaemonPath() { return getRuntime().getDaemonPath(); },
+    isDaemonInstalled() { return getRuntime().isDaemonInstalled(); },
+    sendPayload(payloadObj, cancellable, onMessage, onError, onOffline) { return getRuntime().sendPayload(payloadObj, cancellable, onMessage, onError, onOffline); },
+    cleanupIPC(conn, inStream, outStream) { return getRuntime().cleanupIPC(conn, inStream, outStream); }
+};
