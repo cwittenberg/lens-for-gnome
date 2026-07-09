@@ -17,12 +17,17 @@
       "evidence": [
         {
           "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip:extension.js",
-          "line": 56,
+          "line": 57,
           "snippet": "St.Clipboard.get_default()"
         },
         {
           "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip:extension.js",
-          "line": 101,
+          "line": 102,
+          "snippet": "St.Clipboard.get_default()"
+        },
+        {
+          "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip:ui_preview_text.js",
+          "line": 94,
           "snippet": "St.Clipboard.get_default()"
         }
       ],
@@ -33,8 +38,8 @@
   "artifacts": {
     "root": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip",
     "metadata_path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip:metadata.json",
-    "js_file_count": 19,
-    "file_count": 32,
+    "js_file_count": 22,
+    "file_count": 35,
     "limits": {
       "max_files": 5000,
       "max_file_size_bytes": 10485760,

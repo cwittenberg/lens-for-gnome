@@ -10,6 +10,7 @@ import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import { GnomeLensUI } from './ui.js';
 import { GnomeLensIndicator } from './indicator.js';
 import { checkDaemon, checkDependencies, getDaemonInstallCommand, getDistributionInstructions } from './dependencies.js';
+import { runtime } from './runtime.js';
 
 const SetupRequirementsDialog = GObject.registerClass(
 class SetupRequirementsDialog extends ModalDialog.ModalDialog {
@@ -163,6 +164,8 @@ export default class GnomeLensExtension extends Extension {
             this._settings.disconnectObject(this);
             this._settings = null;
         }
+
+        runtime.destroy();
     }
 
     _bindShortcut() {

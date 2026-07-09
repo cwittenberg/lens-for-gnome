@@ -177,6 +177,13 @@ class RuntimeAdapter {
         if (outStream) outStream.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
         if (conn) conn.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
     }
+
+    destroy() {
+        this.home = null;
+        this.hostEnv = null;
+        this.snapEnv = null;
+        this.activeEnv = null;
+    }
 }
 
 let _runtimeInstance = null;
@@ -194,5 +201,11 @@ export const runtime = {
     getDaemonPath() { return getRuntime().getDaemonPath(); },
     isDaemonInstalled() { return getRuntime().isDaemonInstalled(); },
     sendPayload(payloadObj, cancellable, onMessage, onError, onOffline) { return getRuntime().sendPayload(payloadObj, cancellable, onMessage, onError, onOffline); },
-    cleanupIPC(conn, inStream, outStream) { return getRuntime().cleanupIPC(conn, inStream, outStream); }
+    cleanupIPC(conn, inStream, outStream) { return getRuntime().cleanupIPC(conn, inStream, outStream); },
+    destroy() {
+        if (_runtimeInstance) {
+            _runtimeInstance.destroy();
+            _runtimeInstance = null;
+        }
+    }
 };

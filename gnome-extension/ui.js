@@ -186,7 +186,7 @@ export const GnomeLensUI = GObject.registerClass({
                 let [x, y] = event.get_coords();
                 let deltaX = x - this._dragStartX;
                 let deltaY = y - this._dragStartY;
-                this._dialog.set_position(this._dragStartWinX + deltaX, this._dragStartWinY + deltaY);
+                this._dialog.set_position(this._dragStartWinX + deltaX, this._dialog.y);
                 this._userMoved = true;
                 return Clutter.EVENT_STOP;
             }
@@ -354,10 +354,26 @@ export const GnomeLensUI = GObject.registerClass({
 
         let ext = result.filepath.split('.').pop().toLowerCase();
         let isVideo = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'mpg', 'wmv'].includes(ext);
-        let isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext);
+        let isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext);
+        let isPdf = ['pdf'].includes(ext);
+        let isOffice = ['doc', 'docx', 'odt', 'rtf', 'ppt', 'pptx', 'odp', 'xls', 'xlsx', 'ods'].includes(ext);
+        
+        let isText = [
+            'txt', 'csv', 'md', 'json', 'log', 'sh', 'js', 'ts', 'css', 'xml', 
+            'c', 'cpp', 'h', 'hpp', 'rs', 'py', 'go', 'java', 'cs', 'yaml', 'yml', 
+            'conf', 'ini', 'toml', 'html', 'diff', 'patch', 'sql', 'rb', 'pl', 'lua'
+        ].includes(ext);
 
-        if (isVideo || isImage) {
-            this._preview.showFile(result.filepath, isVideo ? 'video' : 'image');
+        if (isVideo) {
+            this._preview.showFile(result.filepath, 'video');
+        } else if (isImage) {
+            this._preview.showFile(result.filepath, 'image');
+        } else if (isPdf) {
+            this._preview.showFile(result.filepath, 'pdf');
+        } else if (isOffice) {
+            this._preview.showFile(result.filepath, 'office');
+        } else if (isText) {
+            this._preview.showFile(result.filepath, 'text');
         } else {
             this._preview.hide();
         }

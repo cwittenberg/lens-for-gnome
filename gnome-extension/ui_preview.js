@@ -5,6 +5,9 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { GnomeLensImagePreview } from './ui_preview_image.js';
 import { GnomeLensVideoPreview } from './ui_preview_video.js';
+import { GnomeLensPdfPreview } from './ui_preview_pdf.js';
+import { GnomeLensTextPreview } from './ui_preview_text.js';
+import { GnomeLensOfficePreview } from './ui_preview_office.js';
 
 export const GnomeLensPreview = GObject.registerClass({
     GTypeName: 'GnomeLensPreview'
@@ -255,6 +258,12 @@ export const GnomeLensPreview = GObject.registerClass({
             this._activeStrategy = new GnomeLensImagePreview(filepath);
         } else if (type === 'video') {
             this._activeStrategy = new GnomeLensVideoPreview(filepath);
+        } else if (type === 'pdf') {
+            this._activeStrategy = new GnomeLensPdfPreview(filepath);
+        } else if (type === 'office') {
+            this._activeStrategy = new GnomeLensOfficePreview(filepath);
+        } else if (type === 'text') {
+            this._activeStrategy = new GnomeLensTextPreview(filepath);
         }
 
         if (this._activeStrategy) {
