@@ -266,7 +266,7 @@ export const GnomeLensUI = GObject.registerClass({
                 return this._preview && this._preview.isVisible() && this._preview.isVideo();
             },
             onScrub: (offset, isPercentage = false) => {
-                if (this._preview && this._preview.isVisible() && typeof this._preview.scrub === 'function') {
+                if (this._preview && this._preview.isVisible()) {
                     this._preview.scrub(offset, isPercentage);
                 }
             }
@@ -320,7 +320,7 @@ export const GnomeLensUI = GObject.registerClass({
                 return this._preview && this._preview.isVisible() && this._preview.isVideo();
             },
             onScrub: (offset, isPercentage = false) => {
-                if (this._preview && this._preview.isVisible() && typeof this._preview.scrub === 'function') {
+                if (this._preview && this._preview.isVisible()) {
                     this._preview.scrub(offset, isPercentage);
                 }
             }
@@ -782,9 +782,7 @@ export const GnomeLensUI = GObject.registerClass({
         this._activeFilter = 'All';     
         this._updateFilterPills([]);
         
-        if (this._resultsList) {
-            this._resultsList.clearSelection();
-        }
+        this._resultsList.clearSelection();
         
         let enableAiFiltering = this._settings.get_boolean('enable-ai-filtering');
         let prioritizeFolders = this._settings.get_boolean('prioritize-folders');

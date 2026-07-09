@@ -137,7 +137,7 @@ export const GnomeLensPreview = GObject.registerClass({
                 return Clutter.EVENT_PROPAGATE;
             },
             'motion-event', (actor, event) => {
-                if (this.isVideo() && this._activeStrategy && typeof this._activeStrategy._resetHideTimer === 'function') {
+                if (this.isVideo() && this._activeStrategy) {
                     this._activeStrategy._resetHideTimer();
                 }
 
@@ -221,7 +221,7 @@ export const GnomeLensPreview = GObject.registerClass({
     isVideo() { return this._type === 'video'; }
 
     scrub(offset, isPercentage = false) {
-        if (this.isVideo() && this._activeStrategy && typeof this._activeStrategy.scrub === 'function') {
+        if (this.isVideo() && this._activeStrategy) {
             this._activeStrategy.scrub(offset, isPercentage);
         }
     }
@@ -229,7 +229,7 @@ export const GnomeLensPreview = GObject.registerClass({
     showFile(filepath, type) {
         if (this._filepath === filepath && this.visible) return;
         
-        if (this._activeStrategy && typeof this._activeStrategy.saveCurrentPosition === 'function') {
+        if (this.isVideo() && this._activeStrategy) {
             this._activeStrategy.saveCurrentPosition();
         }
 
@@ -263,7 +263,7 @@ export const GnomeLensPreview = GObject.registerClass({
     }
 
     hide() {
-        if (this._activeStrategy && typeof this._activeStrategy.saveCurrentPosition === 'function') {
+        if (this.isVideo() && this._activeStrategy) {
             this._activeStrategy.saveCurrentPosition();
         }
 

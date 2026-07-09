@@ -452,9 +452,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
     }
 
     _updateHUD() {
-        if (this._controlsHUD) {
-            this._controlsHUD.updateUIState(this._currentTimeNs, this._durationNs, this._volumeLevel, this._isMuted);
-        }
+        this._controlsHUD.updateUIState(this._currentTimeNs, this._durationNs, this._volumeLevel, this._isMuted);
     }
 
     _onDestroy() {
@@ -643,12 +641,8 @@ export const GnomeLensVideoPreview = GObject.registerClass({
             let glibBytes = (data instanceof GLib.Bytes) ? data : new GLib.Bytes(data);
             let coglCtx = null;
 
-            if (global.stage && global.stage.context) {
-                let backend = global.stage.context.get_backend();
-                if (backend && typeof backend.get_cogl_context === 'function') {
-                    coglCtx = backend.get_cogl_context();
-                }
-            }
+            let backend = global.stage.context.get_backend();
+            coglCtx = backend.get_cogl_context();
 
             if (coglCtx) {
                 try {
