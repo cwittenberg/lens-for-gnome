@@ -129,7 +129,7 @@ export const GnomeLensOfficePreview = GObject.registerClass({
                 this._findConvertedPdf();
             });
         } catch (e) {
-            this._showError('Preview unavailable (LibreOffice missing or failed)');
+            this._showError('Preview unavailable (LibreOffice is required for Office documents but is not installed)');
         }
     }
 

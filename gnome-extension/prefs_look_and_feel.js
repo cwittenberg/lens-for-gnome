@@ -15,7 +15,7 @@ function showDependencyDialog(parentWindow) {
     });
 
     let distroInfo = getDistributionInstructions();
-    let pangoBody = `The media preview functionality requires ffmpeg, GStreamer, Cogl bindings, poppler-utils (pdftocairo), and LibreOffice to render video, Office documents, and PDFs. Please install them for your distribution, then <b>restart GNOME Shell</b>.\n\n<b>${distroInfo.name}</b>\n<tt>${distroInfo.cmd}</tt>`;
+    let pangoBody = `The media preview functionality requires ffmpeg, GStreamer, Cogl bindings, and poppler-utils (pdftocairo) to render video and PDFs. LibreOffice is an optional dependency to render Office documents. Please install them for your distribution, then <b>restart GNOME Shell</b>.\n\n<b>${distroInfo.name}</b>\n<tt>${distroInfo.cmd}</tt>`;
 
     let label = new Gtk.Label({
         label: pangoBody,

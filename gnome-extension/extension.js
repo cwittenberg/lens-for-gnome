@@ -108,7 +108,7 @@ class SetupRequirementsDialog extends ModalDialog.ModalDialog {
             this.contentLayout.add_child(depsBox);
 
             let noteLabel = new St.Label({
-                text: 'Note: Restart GNOME Shell after installing multimedia packages to load bindings correctly.',
+                text: 'Note: Restart GNOME Shell after installing multimedia packages to load bindings correctly. (LibreOffice is an optional dependency for Office previews)',
                 style_class: 'lens-setup-note-label'
             });
             noteLabel.clutter_text.line_wrap = true;
