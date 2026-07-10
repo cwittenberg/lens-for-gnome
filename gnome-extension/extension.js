@@ -15,11 +15,13 @@ import { runtime } from './runtime.js';
 const SetupRequirementsDialog = GObject.registerClass(
 class SetupRequirementsDialog extends ModalDialog.ModalDialog {
     _init() {
-        super._init({ styleClass: 'lens-setup-dialog' });
+        // Leverages GNOME's native prompt-dialog styling to enforce safe bounds
+        super._init({ styleClass: 'prompt-dialog' });
 
+        // Natively handles the text-wrapping bounds via the core shell CSS
         let content = new Dialog.MessageDialogContent({
-            title: 'Lens for GNOME   Environment Setup',
-            description: 'To enable full functionality, local semantic processing, and rich media previews, please complete the configuration steps detailed below.'
+            title: 'Lens for GNOME Setup',
+            description: 'To enable full functionality, please install the missing system dependencies. Copy the commands below and run them in your terminal.'
         });
         this.contentLayout.add_child(content);
 
@@ -27,91 +29,49 @@ class SetupRequirementsDialog extends ModalDialog.ModalDialog {
         let depsMissing = !checkDependencies();
 
         if (daemonMissing) {
-            let daemonTitle = new St.Label({
-                text: '1. Install Core Background Ingestion Engine (Snap)',
-                style_class: 'lens-setup-section-title'
-            });
-            this.contentLayout.add_child(daemonTitle);
-
-            let daemonBox = new St.BoxLayout({
-                style_class: 'lens-setup-cmd-box',
-                vertical: false,
-                x_expand: true,
-            });
-
-            this._daemonCmdStr = getDaemonInstallCommand();
             let daemonLabel = new St.Label({
-                text: this._daemonCmdStr,
-                style_class: 'lens-setup-cmd-label',
+                text: '1. Background Ingestion Engine:',
+                style: 'font-weight: bold; margin-top: 12px; margin-bottom: 6px;'
+            });
+            this.contentLayout.add_child(daemonLabel);
+
+            let daemonEntry = new St.Entry({
+                text: getDaemonInstallCommand(),
+                can_focus: true,
                 x_expand: true
             });
-            daemonLabel.clutter_text.line_wrap = true;
-            daemonBox.add_child(daemonLabel);
-
-            let daemonCopyBtn = new St.Button({
-                label: 'Copy',
-                style_class: 'lens-setup-copy-btn',
-                y_align: Clutter.ActorAlign.CENTER
-            });
-            daemonCopyBtn.connectObject('clicked', () => {
-                let clipboard = St.Clipboard.get_default();
-                clipboard.set_text(St.ClipboardType.CLIPBOARD, this._daemonCmdStr);
-                daemonCopyBtn.set_label('Copied!');
+            // Auto-select the text so the user can just press Ctrl+C
+            daemonEntry.clutter_text.connectObject('button-press-event', () => {
+                daemonEntry.clutter_text.set_selection(0, daemonEntry.get_text().length);
+                return Clutter.EVENT_PROPAGATE;
             }, this);
-            daemonBox.add_child(daemonCopyBtn);
-
-            this.contentLayout.add_child(daemonBox);
-
-            let daemonNoteLabel = new St.Label({
-                text: 'Note: The "snap connect" command is needed if you intend to index SMB/NFS drives or other removable media.',
-                style_class: 'lens-setup-note-label'
-            });
-            daemonNoteLabel.clutter_text.line_wrap = true;
-            this.contentLayout.add_child(daemonNoteLabel);
+            this.contentLayout.add_child(daemonEntry);
         }
 
         if (depsMissing) {
             let distroInfo = getDistributionInstructions();
-            let depsTitle = new St.Label({
-                text: `2. Install Multimedia Dependencies (${distroInfo.name})`,
-                style_class: 'lens-setup-section-title'
-            });
-            this.contentLayout.add_child(depsTitle);
-
-            let depsBox = new St.BoxLayout({
-                style_class: 'lens-setup-cmd-box',
-                vertical: false,
-                x_expand: true,
-            });
-
-            this._depsCmdStr = distroInfo.cmd;
             let depsLabel = new St.Label({
-                text: this._depsCmdStr,
-                style_class: 'lens-setup-cmd-label',
+                text: `2. Multimedia Dependencies (${distroInfo.name}):`,
+                style: 'font-weight: bold; margin-top: 12px; margin-bottom: 6px;'
+            });
+            this.contentLayout.add_child(depsLabel);
+
+            let depsEntry = new St.Entry({
+                text: distroInfo.cmd,
+                can_focus: true,
                 x_expand: true
             });
-            depsLabel.clutter_text.line_wrap = true;
-            depsBox.add_child(depsLabel);
-
-            let depsCopyBtn = new St.Button({
-                label: 'Copy',
-                style_class: 'lens-setup-copy-btn',
-                y_align: Clutter.ActorAlign.CENTER
-            });
-            depsCopyBtn.connectObject('clicked', () => {
-                let clipboard = St.Clipboard.get_default();
-                clipboard.set_text(St.ClipboardType.CLIPBOARD, this._depsCmdStr);
-                depsCopyBtn.set_label('Copied!');
+            // Auto-select the text so the user can just press Ctrl+C
+            depsEntry.clutter_text.connectObject('button-press-event', () => {
+                depsEntry.clutter_text.set_selection(0, depsEntry.get_text().length);
+                return Clutter.EVENT_PROPAGATE;
             }, this);
-            depsBox.add_child(depsCopyBtn);
-
-            this.contentLayout.add_child(depsBox);
-
+            this.contentLayout.add_child(depsEntry);
+            
             let noteLabel = new St.Label({
-                text: 'Note: Restart GNOME Shell after installing multimedia packages to load bindings correctly. (LibreOffice is an optional dependency for Office previews)',
-                style_class: 'lens-setup-note-label'
+                text: 'Restart GNOME Shell after installing packages.',
+                style: 'font-size: 10pt; color: rgba(255,255,255,0.5); margin-top: 8px;'
             });
-            noteLabel.clutter_text.line_wrap = true;
             this.contentLayout.add_child(noteLabel);
         }
 
@@ -146,7 +106,7 @@ export default class GnomeLensExtension extends Extension {
         Main.wm.removeKeybinding('shortcut');
 
         if (this._setupDialog) {
-            this._setupDialog.destroy();
+            this._setupDialog.close();
             this._setupDialog = null;
         }
 
@@ -191,11 +151,16 @@ export default class GnomeLensExtension extends Extension {
 
         if (daemonMissing || (depsMissing && !this._hasShownSetupDialog)) {
             if (this._setupDialog) {
-                this._setupDialog.destroy();
-                this._setupDialog = null;
+                return false; 
             }
             
             this._setupDialog = new SetupRequirementsDialog();
+            
+            let destroyId = this._setupDialog.connect('destroy', () => {
+                this._setupDialog.disconnect(destroyId);
+                this._setupDialog = null;
+            });
+            
             this._setupDialog.open();
             this._hasShownSetupDialog = true;
             
