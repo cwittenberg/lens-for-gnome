@@ -6,6 +6,8 @@ It indexes local files, extracts searchable text, watches folders for changes, r
 
 The goal is simple: fast, private desktop search that helps you find information inside your files without sending your documents to a remote service. Lens for GNOME is local-first.
 
+[![Get it from the Snap Store](https://snapcraft.io/en/dark/install.svg)](https://snapcraft.io/lens-for-gnome)
+
 ## What Lens Does
 
 Lens turns content into a powerful searchable index on your computer.
