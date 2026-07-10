@@ -2,6 +2,7 @@ use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::sync::{Mutex, RwLock};
 use std::path::Path;
+
 use crate::domain::SearchResult;
 use crate::vector::models::CachedDoc;
 
@@ -77,7 +78,7 @@ impl HybridSearchEngine {
                 safe_query = format!("({}) AND {}", safe_query, exact_fts);
             }
         }
-            
+        
         let has_fts_query = !safe_query.is_empty();
         let clean_q_for_like = raw_query_text.to_lowercase().trim().to_string();
 
@@ -90,8 +91,8 @@ impl HybridSearchEngine {
         let mut sql_base = String::new();
 
         if has_fts_query {
-            sql_base.push_str("SELECT fts.id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip, docs.modified_at as rank_val 
-                               FROM documents_fts fts
+            sql_base.push_str("SELECT fts.id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip, docs.modified_at as rank_val
+                                FROM documents_fts fts
                                JOIN documents docs ON fts.id = docs.id
                                WHERE documents_fts MATCH ?");
             sql_params.push(Box::new(safe_query.clone()));
@@ -117,8 +118,8 @@ impl HybridSearchEngine {
             sql_base.push_str("\nUNION\n");
         }
 
-        sql_base.push_str("SELECT docs.id, '' as snip, docs.modified_at as rank_val 
-                           FROM documents docs
+        sql_base.push_str("SELECT docs.id, '' as snip, docs.modified_at as rank_val
+                            FROM documents docs
                            WHERE 1=1");
 
         if let Some(dir) = directory_filter {
@@ -165,10 +166,13 @@ impl HybridSearchEngine {
         } else {
             eprintln!("[Database] Failed to prepare SQL push-down query:\n{}", sql_base);
         }
+
         drop(conn);
+
         println!("[Database] Exhaustive SQL push-down index filter yielded {} row targets.", fts_matches.len());
 
         let is_dummy_vector = target_embedding.is_empty() || target_embedding.iter().all(|&v| v == 0.0);
+
         let norm_a: f32 = if !is_dummy_vector {
             target_embedding.iter().map(|v| v * v).sum::<f32>().sqrt().max(0.0001)
         } else {
@@ -176,7 +180,6 @@ impl HybridSearchEngine {
         };
 
         let cache_guard = cache_rwlock.read().unwrap();
-
         let mut candidate_scores: Vec<(String, f32, Option<String>, Option<String>)> = cache_guard.iter()
             .filter(|(_, doc)| {
                 if is_dummy_vector && !fts_matches.contains_key(&doc.id) {
@@ -188,6 +191,7 @@ impl HybridSearchEngine {
                 if let Some(dir) = directory_filter {
                     if !doc.id.to_lowercase().starts_with(&dir.to_lowercase()) { return false; }
                 }
+
                 for (key, val) in filters {
                     if let Some(doc_val) = doc.metadata.get(key) {
                         if doc_val.to_lowercase() != val.to_lowercase() {
@@ -206,12 +210,14 @@ impl HybridSearchEngine {
                 } else {
                     let mut dot_product = 0.0;
                     let mut norm_b = 0.0;
+
                     for (i, &val_b) in doc.embedding.iter().enumerate() {
                         if i >= target_embedding.len() { break; }
                         let val_a = target_embedding[i];
                         dot_product += val_a * val_b;
                         norm_b += val_b * val_b;
                     }
+
                     if norm_b == 0.0 { 0.0 } else { dot_product / (norm_a * norm_b.sqrt()) }
                 };
                 
@@ -221,7 +227,7 @@ impl HybridSearchEngine {
                 (doc.id.clone(), v_score, is_shallow, filetype)
             })
             .collect();
-
+            
         println!("[Database] Retained {} candidates after cache threshold and metadata bounds.", candidate_scores.len());
 
         candidate_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -236,6 +242,7 @@ impl HybridSearchEngine {
         
         let mut scored_candidates: Vec<_> = candidate_scores.into_iter().map(|(id, _v_score, is_shallow_opt, filetype_opt)| {
             let v_rank = *vector_ranks.get(&id).unwrap_or(&1000) as f32;
+
             let (f_rank, snippet) = if let Some((r, s)) = fts_matches.get(&id) {
                 (*r as f32, s.clone())
             } else {
@@ -303,6 +310,7 @@ impl HybridSearchEngine {
         if prioritize_folders {
             let mut top_folders = Vec::new();
             let mut remaining = Vec::new();
+
             for cand in scored_candidates {
                 if cand.2.as_deref() == Some("directory") && top_folders.len() < 3 {
                     top_folders.push(cand);
@@ -310,6 +318,7 @@ impl HybridSearchEngine {
                     remaining.push(cand);
                 }
             }
+
             scored_candidates = top_folders;
             scored_candidates.extend(remaining);
         }
@@ -325,8 +334,8 @@ impl HybridSearchEngine {
 
         let mut results = Vec::new();
         let mut ghosts_to_heal = Vec::new();
-
         let mut full_texts = HashMap::new();
+
         if !scored_candidates.is_empty() {
             let conn = match conn_mutex.lock() {
                 Ok(guard) => guard,
@@ -443,7 +452,6 @@ impl HybridSearchEngine {
         }
         
         println!("[Database] Vector/Hybrid search finalized {} results to return to router.", results.len());
-
         results
     }
     
@@ -467,11 +475,12 @@ impl HybridSearchEngine {
                     if file_name.starts_with('.') {
                         continue;
                     }
-
+                    
                     let file_path = entry.path().to_string_lossy().to_string();
-
+                    
                     if let Some(cached_doc) = cache_guard.get(&file_path) {
                         let is_dir = cached_doc.metadata.get("filetype").map(|s| s.as_str()) == Some("directory");
+
                         results.push(SearchResult {
                             id: cached_doc.id.clone(),
                             title: file_name.clone(),
@@ -488,13 +497,14 @@ impl HybridSearchEngine {
                             ai_reasoning: None,
                         });
                     } else {
-                        let file_type = entry.file_type().ok();
-                        let is_dir = file_type.map(|ft| ft.is_dir()).unwrap_or(false);
+                        // FIX: Use fs::metadata to follow symlinks when determining if node is a directory
+                        let meta_res = std::fs::metadata(entry.path());
+                        let is_dir = meta_res.as_ref().map(|m| m.is_dir()).unwrap_or(false);
                         
                         let mut metadata = HashMap::new();
                         let mut created_at = None;
                         
-                        if let Ok(meta) = entry.metadata() {
+                        if let Ok(meta) = meta_res {
                             if let Ok(modified) = meta.modified().or_else(|_| meta.created()) {
                                 if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
                                     created_at = Some(duration.as_secs());

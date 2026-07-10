@@ -1,4 +1,5 @@
 // src/ingestion/spreadsheet.rs
+
 use std::path::Path;
 use calamine::{Reader, open_workbook_auto, DataType};
 use super::FileExtractor;
@@ -7,7 +8,7 @@ pub struct SpreadsheetExtractor;
 
 impl FileExtractor for SpreadsheetExtractor {
     fn can_handle(&self, extension: &str) -> bool {
-        matches!(extension, "xlsx" | "xls")
+        matches!(extension, "xlsx" | "xls" | "ods")
     }
 
     fn extract(&self, path: &Path) -> Result<String, String> {
@@ -33,6 +34,7 @@ impl FileExtractor for SpreadsheetExtractor {
                 }
             }
         }
+        
         Ok(content)
     }
 }

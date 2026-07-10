@@ -1,6 +1,6 @@
 # Lens for GNOME
 
-**Lens for GNOME** is a local-first desktop search engine for GNOME.
+**Lens for GNOME** is an AI powered local-first desktop search engine.
 
 It indexes local files, extracts searchable text, watches folders for changes, runs local embeddings, supports OCR, syncs mail, and can use local GGUF language models through llama.cpp (such as those from HuggingFace).
 

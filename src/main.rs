@@ -1,5 +1,4 @@
 // src/main.rs
-
 mod domain;
 mod vector;
 mod ingestion;
@@ -138,6 +137,7 @@ fn get_gsettings_array(adapter: &RuntimeAdapter, key: &str) -> Vec<String> {
                 results.push(trimmed.to_string());
             }
         }
+
         println!("[Boot DEBUG] Parsed array for {}: {:?}", key, results);
         return results;
     }
@@ -147,6 +147,7 @@ fn get_gsettings_array(adapter: &RuntimeAdapter, key: &str) -> Vec<String> {
 
 fn handle_client(mut stream: UnixStream, router: Arc<SystemRouter>) {
     let mut buffer = [0; 4096];
+
     if let Ok(bytes_read) = stream.read(&mut buffer) {
         if bytes_read > 0 {
             let request = String::from_utf8_lossy(&buffer[..bytes_read]);
@@ -210,23 +211,57 @@ fn main() -> std::io::Result<()> {
     let home_dir = env::var("SNAP_REAL_HOME").unwrap_or_else(|_| env::var("HOME").expect("HOME environment variable must be set"));
     
     let config_dir = runtime_adapter.config_dir().to_string_lossy().to_string();
+    let mut is_first_run = false;
     if !Path::new(&config_dir).exists() {
         fs::create_dir_all(&config_dir).expect("Failed to create secure config directory");
+        is_first_run = true;
     }
-
+    
     let data_dir = runtime_adapter.data_dir().to_string_lossy().to_string();
     if !Path::new(&data_dir).exists() {
         fs::create_dir_all(&data_dir).expect("Failed to create secure data directory");
     }
-
+    
     let db_path = format!("{}/lens-for-gnome.db", data_dir);
-
     let state_dir = runtime_adapter.state_dir().to_string_lossy().to_string();
     if !Path::new(&state_dir).exists() {
         fs::create_dir_all(&state_dir).expect("Failed to create secure state directory");
     }
     
     let socket_path = format!("{}/lens_for_gnome.sock", state_dir);
+
+    if is_first_run {
+        let icon_path = env::var("SNAP")
+            .map(|snap| format!("{}/usr/share/pixmaps/lens-for-gnome.svg", snap))
+            .unwrap_or_else(|_| {
+                let local_path = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("metadata/io.github.cwittenberg.Lens.icon.svg");
+                if local_path.exists() {
+                    local_path.canonicalize().unwrap_or(local_path).to_string_lossy().to_string()
+                } else {
+                    "lens-for-gnome".to_string()
+                }
+            });
+
+        let _ = std::process::Command::new("gdbus")
+            .args(&[
+                "call", "--session",
+                "--dest", "org.freedesktop.Notifications",
+                "--object-path", "/org/freedesktop/Notifications",
+                "--method", "org.freedesktop.Notifications.Notify",
+                "--",
+                &format!("'{}'", "Lens for GNOME"),
+                "uint32 0",
+                &format!("'{}'", icon_path),
+                &format!("'{}'", "Lens for GNOME"),
+                &format!("'{}'", "Lens is preparing your system. This might take awhile... (AI model download and indexation)"),
+                "@as []",
+                "@a{sv} {}",
+                "int32 -1"
+            ])
+            .spawn();
+    }
 
     let max_depth = get_gsettings_int(&runtime_adapter, "index-max-depth", 3);
 
@@ -314,7 +349,6 @@ fn main() -> std::io::Result<()> {
     if !Path::new(&mail_dir).exists() {
         fs::create_dir_all(&mail_dir).expect("Failed to create secure mail directory");
     }
-
     if !target_directories.contains(&mail_dir) {
         target_directories.push(mail_dir.clone());
     }

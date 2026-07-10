@@ -1,4 +1,3 @@
-// gnome-extension/ui_results.js
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
@@ -17,9 +16,9 @@ class GnomeLensResultsList extends St.ScrollView {
             reactive: true,
             can_focus: true
         });
+
         this._settings = settings;
         this.callbacks = callbacks || {};
-
         this._results = [];
         this._resultWidgets = [];
         this._selectedIndex = -1;
@@ -202,6 +201,7 @@ class GnomeLensResultsList extends St.ScrollView {
     clear() {
         this._results = [];
         this._selectedIndex = -1;
+
         for (let widget of this._resultWidgets) {
             widget.reactive = false;
             widget.remove_all_transitions();
@@ -229,6 +229,7 @@ class GnomeLensResultsList extends St.ScrollView {
             } catch(e) {
                 console.debug(`[Lens for GNOME] Target parent directory does not exist: ${e.message}`);
             }
+
             if (!exists) {
                 parent.make_directory_async(GLib.PRIORITY_DEFAULT, cancellable, (pf, pres) => {
                     try { pf.make_directory_finish(pres); } catch(e) { console.debug(`[Lens for GNOME] Failed to make parent directory: ${e.message}`); }
@@ -319,15 +320,17 @@ class GnomeLensResultsList extends St.ScrollView {
     _onScroll() {
         let adj = this.vscroll ? this.vscroll.adjustment : this.vadjustment;
         if (!adj) return;
+
         if (adj.value >= adj.upper - adj.page_size - 150) {
             this._renderNextChunk();
         }
     }
 
-    renderResults(resultsArray, activeFilter = 'All') {
-        let oldSelectedId = null;
-        if (this._selectedIndex >= 0 && this._selectedIndex < this._results.length) {
-            oldSelectedId = this._results[this._selectedIndex].id;
+    renderResults(resultsArray, activeFilter = 'All', savedSelectionId = null) {
+        let oldSelectedId = savedSelectionId;
+        if (!oldSelectedId && this._selectedIndex >= 0 && this._selectedIndex < this._results.length) {
+            let curr = this._results[this._selectedIndex];
+            oldSelectedId = curr.id || curr.filepath;
         }
 
         this.clear();
@@ -416,8 +419,8 @@ class GnomeLensResultsList extends St.ScrollView {
         if (this._results.length > 0) {
             let newIndex = 0;
             if (oldSelectedId) {
-                let found = this._results.findIndex(r => r.id === oldSelectedId);
-                if (found !== -1 && found < this._resultWidgets.length) {
+                let found = this._results.findIndex(r => (r.id && r.id === oldSelectedId) || (r.filepath && r.filepath === oldSelectedId));
+                if (found !== -1) {
                     newIndex = found;
                 }
             }
@@ -606,6 +609,7 @@ class GnomeLensResultsList extends St.ScrollView {
                 });
                 titleBox.add_child(pathLabel);
             }
+
             textBox.add_child(titleBox);
 
             let showSnippet = true;
@@ -623,7 +627,7 @@ class GnomeLensResultsList extends St.ScrollView {
             }
 
             if (res.ai_reasoning) {
-                let reasoningPrefix = res.ai_matched ? '🧠 ' : '❌ ';
+                let reasoningPrefix = res.ai_matched ? '↳ ' : '⚠ ';
                 let reasoningLabel = new St.Label({
                     text: reasoningPrefix + res.ai_reasoning,
                     style_class: 'lens-result-ai-reasoning',
@@ -663,9 +667,9 @@ class GnomeLensResultsList extends St.ScrollView {
                     let dateStr = res.metadata.date;
                     if (!isNaN(d.getTime())) {
                         let now = new Date();
-                        let isToday = d.getDate() === now.getDate() &&
-                                       d.getMonth() === now.getMonth() &&
-                                       d.getFullYear() === now.getFullYear();
+                        let isToday = d.getDate() === now.getDate() && 
+                                      d.getMonth() === now.getMonth() && 
+                                      d.getFullYear() === now.getFullYear();
                         if (isToday) {
                             dateStr = d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                         } else {
@@ -787,6 +791,7 @@ class GnomeLensResultsList extends St.ScrollView {
             }
 
             itemBox.add_child(actionBox);
+            
             this._resultsBox.add_child(itemBox);
             this._resultWidgets.push(itemBox);
         }

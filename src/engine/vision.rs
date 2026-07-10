@@ -1,9 +1,11 @@
 // src/engine/vision.rs
+
 use std::path::Path;
 use std::env;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use image::{DynamicImage, GenericImageView};
+
 use super::smart_extract::SmartExtractor;
 use super::RuntimeAdapter;
 
@@ -26,10 +28,11 @@ pub struct VisionEngine {
 impl VisionEngine {
     pub fn new(runtime_adapter: Arc<RuntimeAdapter>) -> Self {
         let debug_mode = env::var("DEBUG_VISION_OCR").unwrap_or_else(|_| "0".to_string()) == "1";
+        
         if debug_mode {
             println!("[DEBUG] Vision OCR debugging is ENABLED. Raw text will be printed to stdout.");
         }
-
+        
         Self {
             smart_extractor: SmartExtractor::new(),
             debug_mode,
@@ -56,7 +59,7 @@ impl VisionEngine {
                 println!("{}", qr_data.trim());
                 println!("=======================================================================================\n");
             }
-
+            
             return serde_json::json!({
                 "type": "qr",
                 "text": qr_data,
@@ -92,13 +95,14 @@ impl VisionEngine {
         }
 
         let scaled_img = if width < 1500 && height < 1500 {
-            img.resize(width * 3, height * 3, image::imageops::FilterType::CatmullRom)
+            img.resize(width * 2, height * 2, image::imageops::FilterType::Triangle)
         } else {
             img
         };
 
         let rgba_img = scaled_img.to_rgba8();
         let mut rgb_img = image::RgbImage::new(scaled_img.width(), scaled_img.height());
+
         for (x, y, pixel) in rgba_img.enumerate_pixels() {
             let alpha = pixel[3] as f32 / 255.0;
             let r = ((1.0 - alpha) * 255.0 + alpha * pixel[0] as f32) as u8;
@@ -108,8 +112,8 @@ impl VisionEngine {
         }
         
         let mut safe_img = image::DynamicImage::ImageRgb8(rgb_img);
-        let brightness = self.calculate_mean_brightness(&safe_img);
 
+        let brightness = self.calculate_mean_brightness(&safe_img);
         if brightness < 0.45 {
             safe_img.invert();
         }
@@ -162,7 +166,27 @@ impl VisionEngine {
 
         let _ = std::fs::remove_file(&temp_flattened);
 
-        if self.debug_mode {
+        // --- LINE-BY-LINE SURGICAL QUALITY GATE ---
+        let mut final_text = String::new();
+        let mut is_gibberish = false;
+
+        if let Some(cleaned) = self.sanitize_ocr_text(&final_res.text) {
+            final_text = cleaned;
+        } else {
+            is_gibberish = true;
+            if self.debug_mode {
+                println!("[DEBUG] OCR REJECTED -> Entire block was structural noise or lacked sufficient proper text.");
+            }
+        }
+
+        if is_gibberish {
+            final_res.text = String::new();
+            final_res.confidence = 0.0;
+        } else {
+            final_res.text = final_text;
+        }
+
+        if self.debug_mode && !final_res.text.is_empty() {
             println!("\n================================================================");
             println!("[DEBUG] RAW VISION OCR OUTPUT FOR: {}", path);
             println!("----------------------------------------------------------------");
@@ -178,6 +202,135 @@ impl VisionEngine {
             "confidence": final_res.confidence / 100.0,
             "entities": entities
         })
+    }
+
+    /// Surgically evaluates OCR text strictly on a line-by-line basis.
+    /// Deletes lines that fail structural entropy checks.
+    /// Evaluates the surviving block to ensure a sufficient amount of proper text remains.
+    fn sanitize_ocr_text(&self, text: &str) -> Option<String> {
+        let mut cleaned_lines = Vec::new();
+        let mut total_original_lines = 0;
+
+        for line in text.lines() {
+            let line_trim = line.trim();
+            if line_trim.is_empty() { continue; }
+            
+            total_original_lines += 1;
+
+            let total_chars = line_trim.chars().filter(|c| !c.is_whitespace()).count();
+            if total_chars == 0 { continue; }
+
+            let mut alnum_chars = 0;
+            let mut cjk_chars = 0;
+            let mut garbage_symbols = 0;
+            let mut unique_alnum = std::collections::HashSet::new();
+
+            for c in line_trim.chars() {
+                if c.is_whitespace() { continue; }
+                
+                if c.is_alphanumeric() {
+                    alnum_chars += 1;
+                    unique_alnum.insert(c.to_lowercase().next().unwrap_or(c));
+                    
+                    let u = c as u32;
+                    // Detect Logographic/CJK ranges (Kana, Hangul, CJK Ideographs)
+                    if (u >= 0x2E80 && u <= 0x9FFF) || (u >= 0xAC00 && u <= 0xD7AF) || (u >= 0xF900 && u <= 0xFAFF) || (u >= 0x3040 && u <= 0x30FF) {
+                        cjk_chars += 1;
+                    }
+                } else {
+                    // Acceptable punctuation and math symbols
+                    if !".,!?'\"()[]{}:;/%$€£+-=*&@#".contains(c) {
+                        garbage_symbols += 1;
+                    }
+                }
+            }
+
+            let is_cjk = cjk_chars > 0 && (cjk_chars as f64 / alnum_chars as f64) > 0.3;
+            
+            // RULE 1: Alphanumeric Density (Is it mostly symbols?)
+            if (alnum_chars as f64 / total_chars as f64) < 0.40 {
+                continue;
+            }
+
+            // RULE 2: Excessive Garbage Symbols (Edge hallucination)
+            if (garbage_symbols as f64 / total_chars as f64) > 0.15 {
+                continue;
+            }
+
+            // RULE 3: Repetitive Spam (e.g. "111 11 111", "aaaaaa")
+            if alnum_chars > 10 && unique_alnum.len() <= 3 {
+                continue;
+            }
+
+            if !is_cjk {
+                let mut alnum_words = 0;
+                let mut tiny_alnum_words = 0; 
+                let mut valid_multi_char_words = 0;
+                let mut long_words_without_vowels = 0;
+                
+                let words: Vec<&str> = line_trim.split_whitespace().collect();
+                for word in &words {
+                    let clean_word: String = word.chars().filter(|c| c.is_alphabetic()).collect();
+                    let len = clean_word.len();
+                    
+                    if len > 0 {
+                        alnum_words += 1;
+                        if len <= 2 { 
+                            tiny_alnum_words += 1; 
+                        } else {
+                            let has_vowel = clean_word.to_lowercase().chars().any(|c| "aeiouyáéíóúäöüßàèìòùâêîôû".contains(c));
+                            if !has_vowel {
+                                long_words_without_vowels += 1;
+                            } else {
+                                valid_multi_char_words += 1;
+                            }
+                        }
+                    }
+                }
+
+                // RULE 4: Long consonant strings with no vowels (Hallucinated textures)
+                if long_words_without_vowels > 0 && valid_multi_char_words == 0 {
+                    continue;
+                }
+
+                // RULE 5: Pure Fragmentation (Shattered noise e.g. "A b c D E f")
+                if alnum_words >= 4 && (tiny_alnum_words as f64 / alnum_words as f64) >= 0.65 {
+                    continue;
+                }
+            }
+
+            // Line survived all checks, keep it
+            cleaned_lines.push(line_trim.to_string());
+        }
+        
+        // --- POST-SANITIZATION EVALUATION ---
+
+        if cleaned_lines.is_empty() {
+            return None;
+        }
+
+        let final_text = cleaned_lines.join("\n");
+        let total_alnum = final_text.chars().filter(|c| c.is_alphanumeric()).count();
+        let total_words = final_text.split_whitespace().filter(|w| w.chars().any(|c| c.is_alphabetic())).count();
+
+        // RULE 6: Minimum Proper Text Threshold
+        // If the surviving text is just 1 or 2 random words, or very few characters, 
+        // it is a false positive and not "a proper good amount of text".
+        if total_alnum < 10 || total_words < 3 {
+            return None;
+        }
+            
+        // RULE 7: Document Collapse 
+        // If the original document was noisy and we had to delete over 80% of the lines, 
+        // the remaining lines are mathematically likely to just be a fluke that passed the gate.
+        if total_original_lines > 5 {
+            let survival_ratio = cleaned_lines.len() as f64 / total_original_lines as f64;
+            if survival_ratio < 0.20 {
+                return None; 
+            }
+        }
+
+        Some(final_text)
     }
 
     fn extract_qr(&self, path: &str) -> String {
@@ -253,6 +406,7 @@ impl VisionEngine {
         let _ = std::fs::remove_file(&txt_path);
         let _ = std::fs::remove_file(&tsv_path);
 
+        // Pre-clean formatting weirdness from tesseract
         let mut cleaned = Vec::new();
         for line in text.lines() {
             let trimmed = line.trim();
@@ -265,12 +419,13 @@ impl VisionEngine {
             }
         }
         text = cleaned.join("\n");
-
+        
         while text.contains("\n\n\n") {
             text = text.replace("\n\n\n", "\n\n");
         }
         let text = text.trim().to_string();
 
+        // Calculate confidence
         let mut total_conf = 0.0;
         let mut word_count = 0;
 
@@ -289,11 +444,9 @@ impl VisionEngine {
 
         let confidence = if word_count > 0 { total_conf / (word_count as f64) } else { 0.0 };
         let char_count = text.len();
-
         let garbage_count = text.chars().filter(|c| {
             !c.is_alphanumeric() && !c.is_whitespace() && !".,!?@/:-'\"()[]{}_+=$%".contains(*c)
         }).count();
-
         let garbage_ratio = if char_count > 0 { (garbage_count as f64) / (char_count as f64) } else { 0.0 };
 
         Some(TesseractResult {

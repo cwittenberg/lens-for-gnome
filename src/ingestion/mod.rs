@@ -1,4 +1,5 @@
 // src/ingestion/mod.rs
+
 pub mod plaintext;
 pub mod csv_file;
 pub mod pdf;
@@ -58,6 +59,7 @@ impl IndexerProgressState {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
+
         let file_path = Path::new(&self.config_dir).join("indexer_state.json");
         let temp_path = Path::new(&self.config_dir).join(format!("indexer_state_{}.tmp", std::process::id()));
         
@@ -88,6 +90,7 @@ pub struct IngestionPipeline {
     blacklist: Vec<String>,
     pub progress: IndexerProgressState,
     mail_dir: String,
+    thread_pool: rayon::ThreadPool,
 }
 
 impl IngestionPipeline {
@@ -102,9 +105,24 @@ impl IngestionPipeline {
 
         let config_path = format!("{}/domains.json", config_dir);
         let domain_keywords = Self::load_or_create_config(&config_path);
+        
         let progress = IndexerProgressState::new(config_dir);
         
         let mail_dir = runtime_adapter.data_dir().join("mail").to_string_lossy().to_string();
+
+        // 1. Detect logical cores available to the application
+        let available_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        
+        // 2. Reserve at least 2 cores strictly for GNOME/OS to prevent desktop thrashing.
+        // On a 4-core machine, it uses 2. On a 16-core machine, it uses 14. 
+        let worker_threads = available_cores.saturating_sub(2).max(1);
+        
+        // 3. Build an isolated thread pool so we don't pollute the global Rayon state
+        let thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(worker_threads)
+            .thread_name(|i| format!("lens-worker-{}", i))
+            .build()
+            .expect("Failed to build isolated ingestion thread pool");
 
         Self {
             store,
@@ -124,6 +142,7 @@ impl IngestionPipeline {
             blacklist,
             progress,
             mail_dir,
+            thread_pool,
         }
     }
 
@@ -410,6 +429,7 @@ impl IngestionPipeline {
                     self.progress.deep_processed.fetch_add(1, Ordering::Relaxed);
                     println!("[Indexer] Deep Processed: {:?}", filename);
                 }
+                
                 self.progress.write_flush();
             }
         }
@@ -461,6 +481,7 @@ impl IngestionPipeline {
         
         println!("[Indexer] Fetching existing index state for reconciliation...");
         let db_state = self.store.get_all_document_timestamps();
+
         let mut missing_or_modified = Vec::new();
 
         for target_dir in &target_dirs {
@@ -542,7 +563,9 @@ impl IngestionPipeline {
             self.progress.total_files.store(file_count, Ordering::Relaxed);
             self.progress.write_flush();
             
-            let batch_size = 12; 
+            // Dynamic Batch Sizing: Scales memory ingestion based on the safe thread count
+            // Cap it between 32 and 128 to prevent memory spikes while still feeding the fastembed matrix effectively.
+            let batch_size = (self.thread_pool.current_num_threads() * 8).clamp(32, 128);
             let total_batches = (file_count as f64 / batch_size as f64).ceil() as usize;
 
             for (batch_idx, chunk) in missing_or_modified.chunks(batch_size).enumerate() {
@@ -553,25 +576,28 @@ impl IngestionPipeline {
 
                 println!("[Indexer] Processing batch {}/{} ({} files)...", batch_idx + 1, total_batches, chunk.len());
 
-                let prepared_docs: Vec<_> = chunk.par_iter().filter_map(|entry| {
-                    let filename = entry.path().file_name().unwrap_or_default().to_string_lossy().to_string();
-                    
-                    let doc_opt = self.prepare_document(entry.path());
-                    
-                    if let Some(ref doc) = doc_opt {
-                        if doc.2 {
-                            self.progress.shallow_processed.fetch_add(1, Ordering::Relaxed);
-                            println!("[Indexer] Tracked (Shallow): {}", filename);
+                // Execute the par_iter exclusively inside our isolated safe thread pool
+                let prepared_docs: Vec<_> = self.thread_pool.install(|| {
+                    chunk.par_iter().filter_map(|entry| {
+                        let filename = entry.path().file_name().unwrap_or_default().to_string_lossy().to_string();
+                        
+                        let doc_opt = self.prepare_document(entry.path());
+                        
+                        if let Some(ref doc) = doc_opt {
+                            if doc.2 {
+                                self.progress.shallow_processed.fetch_add(1, Ordering::Relaxed);
+                                println!("[Indexer] Tracked (Shallow): {}", filename);
+                            } else {
+                                println!("[Indexer] Extracted (Deep/AI Queued): {}", filename);
+                            }
                         } else {
-                            println!("[Indexer] Extracted (Deep/AI Queued): {}", filename);
+                            self.progress.shallow_processed.fetch_add(1, Ordering::Relaxed);
+                            println!("[Indexer] Skipped (Unmodified/Already Indexed): {}", filename);
                         }
-                    } else {
-                        self.progress.shallow_processed.fetch_add(1, Ordering::Relaxed);
-                        println!("[Indexer] Skipped (Unmodified/Already Indexed): {}", filename);
-                    }
-                    
-                    doc_opt.map(|d| (d, filename))
-                }).collect();
+                        
+                        doc_opt.map(|d| (d, filename))
+                    }).collect()
+                });
 
                 self.progress.write_flush();
 
@@ -593,6 +619,7 @@ impl IngestionPipeline {
                         Ok(m) => m,
                         Err(p) => p.into_inner(),
                     };
+
                     if let Ok(embs) = model.embed(texts_to_embed, None) {
                         embeddings_result = embs;
                     } else {
@@ -602,7 +629,6 @@ impl IngestionPipeline {
 
                 let mut final_docs = Vec::new();
                 let mut embed_idx = 0;
-
                 for (doc, filename) in prepared_docs {
                     let vector = if doc.2 {
                         vec![0.0; 384]

@@ -4,7 +4,6 @@ import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GObject from 'gi://GObject';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-
 import ServiceClient from './service.js';
 import { GnomeLensSearchBar, GnomeLensAdvancedFilters } from './ui_search.js';
 import { GnomeLensResultsList } from './ui_results.js';
@@ -14,6 +13,7 @@ import { GnomeLensPreview } from './ui_preview.js';
 export const GnomeLensUI = GObject.registerClass({
     GTypeName: 'GnomeLensUI',
 }, class GnomeLensUI extends St.Widget {
+
     _init(settings, extension) {
         super._init({
             name: 'GnomeLensBackdrop',
@@ -36,10 +36,12 @@ export const GnomeLensUI = GObject.registerClass({
         this._modalPushed = false;
         this._stageCaptureConnected = false;
         
+        this._selectionMemory = new Map();
+        
         this.isOpen = false;
         this.isClosing = false;
-
         this._currentThemeFile = null;
+
         this._isDragging = false;
         this._dragStartX = 0;
         this._dragStartY = 0;
@@ -154,7 +156,6 @@ export const GnomeLensUI = GObject.registerClass({
         this._searchBar.setCount(0);
         this._advancedFilters.clear();
         this._updatePosition(false, true);
-
         if (this._preview) this._preview.hide();
     }
 
@@ -239,9 +240,7 @@ export const GnomeLensUI = GObject.registerClass({
             },
             onNavigateDown: () => {
                 if (this._resultsList.hasResults()) {
-                    if (this._resultsList.getSelectedIndex() === -1) {
-                        this._resultsList.selectNext();
-                    }
+                    this._resultsList.selectNext();
                     this._resultsList.grab_key_focus();
                 } else if (this._resultsList.getSelectedIndex() === -1) {
                     if (this._historyIndex > 0) {
@@ -342,6 +341,14 @@ export const GnomeLensUI = GObject.registerClass({
     }
 
     _onResultSelected(result) {
+        if (result) {
+            let queryId = this._searchBar.getQuery();
+            let resId = result.id || result.filepath;
+            if (resId) {
+                this._selectionMemory.set(queryId, resId);
+            }
+        }
+
         if (!this._settings.get_boolean('show-preview')) {
             if (this._preview) this._preview.hide();
             return;
@@ -422,7 +429,6 @@ export const GnomeLensUI = GObject.registerClass({
             options.forEach(f => {
                 let label = new St.Label({ text: f });
                 label.clutter_text.ellipsize = 0; 
-
                 let btn = new St.Button({
                     child: label,
                     style_class: 'lens-filter-pill',
@@ -440,7 +446,6 @@ export const GnomeLensUI = GObject.registerClass({
                 }, this);
                 
                 let estimatedWidth = f.length * 10 + 32 + 10;
-
                 if (currentAccumulatedWidth + estimatedWidth <= maxAllowedWidth) {
                     this._filtersBox.add_child(btn);
                     currentAccumulatedWidth += estimatedWidth;
@@ -501,7 +506,7 @@ export const GnomeLensUI = GObject.registerClass({
             targetX = this._dialog.x;
             targetY = this._dialog.y;
         }
-            
+        
         this._dialog.remove_transition('x');
         this._dialog.remove_transition('y');
         
@@ -573,6 +578,7 @@ export const GnomeLensUI = GObject.registerClass({
 
     open() {
         if (this.isOpen || this.isClosing) return;
+
         this.isOpen = true;
         this.isClosing = false;
         
@@ -591,6 +597,7 @@ export const GnomeLensUI = GObject.registerClass({
         this._activeFilter = 'All';
         this._lastResults = [];
         this._userMoved = false;
+        this._selectionMemory.clear();
 
         this._updateFilterPills([]);
         this._updatePosition(this._resultsList.hasResults(), false);
@@ -602,7 +609,6 @@ export const GnomeLensUI = GObject.registerClass({
         if (anim.duration > 0) {
             this._dialog.set_scale(0.9, 0.9);
             this._dialog.set_opacity(0);
-
             this._dialog.ease({
                 scale_x: 1.0,
                 scale_y: 1.0,
@@ -621,17 +627,18 @@ export const GnomeLensUI = GObject.registerClass({
 
     close(instant = false) {
         if (this.isClosing || !this.isOpen) return;
+
         this.isClosing = true;
         this.reactive = false;
         this._dialog.reactive = false;
         
         if (this._preview) this._preview.hide();
+
         this._service.cancel();
         this._status.stopAnimation();
         this._searchBar.stopPulse();
 
         this._disconnectStageCapture();
-
         global.stage.set_key_focus(null);
         this._popModal();
 
@@ -666,7 +673,6 @@ export const GnomeLensUI = GObject.registerClass({
         this._dialog.remove_all_transitions();
         this._dialog.set_scale(0.9, 0.9);
         this._dialog.set_opacity(0);
-
         if (this.get_parent()) {
             Main.layoutManager.uiGroup.remove_child(this);
         }
@@ -814,17 +820,17 @@ export const GnomeLensUI = GObject.registerClass({
                 } else if (data.status === 'done' || data.status === 'final') {
                     this._status.stopAnimation();
                     this._searchBar.stopPulse();
-
                     if (data.mode !== 'rag_synthesis') {
                         this._synthesis.setSynthesis(null); 
                     }
                 }
-
+                
                 if (data.results && Array.isArray(data.results)) {
                     this._lastResults = data.results;
                     
                     this._updateFilterPills(this._lastResults);
-                    this._resultsList.renderResults(this._lastResults, this._activeFilter);
+                    let savedId = this._selectionMemory.get(fullQuery) || null;
+                    this._resultsList.renderResults(this._lastResults, this._activeFilter, savedId);
                     this._searchBar.setCount(this._resultsList.getCount());
                     
                     if (this._resultsList.hasResults()) {
@@ -849,6 +855,7 @@ export const GnomeLensUI = GObject.registerClass({
     destroy() {
         this._disconnectStageCapture();
         this._popModal();
+
         if (this.isOpen || this.isClosing) {
             this.isOpen = false;
             this.isClosing = false;
@@ -857,7 +864,7 @@ export const GnomeLensUI = GObject.registerClass({
                 Main.layoutManager.uiGroup.remove_child(this);
             }
         }
-
+        
         if (this._activeLaunches) {
             for (let launch of this._activeLaunches) {
                 launch.cancel();
@@ -885,7 +892,6 @@ export const GnomeLensUI = GObject.registerClass({
         this._settings.disconnectObject(this);
         this.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
-
         super.destroy();
     }
 });

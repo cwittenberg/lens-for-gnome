@@ -1,5 +1,4 @@
 // src/engine/router/mod.rs
-
 mod script;
 mod ipc;
 
@@ -27,6 +26,7 @@ fn parse_date_to_timestamp(date_str: &str) -> Option<u64> {
             for year in 1970..y {
                 days += if is_leap_year(year) { 366 } else { 365 };
             }
+            
             let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
             for month in 0..(m - 1) as usize {
                 if month == 1 && is_leap_year(y) {
@@ -36,6 +36,7 @@ fn parse_date_to_timestamp(date_str: &str) -> Option<u64> {
                 }
             }
             days += (d - 1) as i32;
+            
             return Some((days as u64) * 86400);
         }
     }
@@ -105,12 +106,12 @@ impl SystemRouter {
                 return;
             }
         };
-
+        
         let enable_ai_filtering = match parsed {
             Ok(ref json) => json["enable_ai_filtering"].as_bool().unwrap_or(true),
             Err(_) => true,
         };
-
+        
         let prioritize_folders = match parsed {
             Ok(ref json) => json["prioritize_folders"].as_bool().unwrap_or(true),
             Err(_) => true,
@@ -138,7 +139,9 @@ impl SystemRouter {
         
         let mut current_query = search_query.raw_text.clone();
         let lower_query = current_query.to_lowercase();
-        let home_dir = std::env::var("HOME").unwrap_or_default();
+        
+        // FIX: Ensure correct HOME dir for Snaps and fallback correctly
+        let home_dir = std::env::var("SNAP_REAL_HOME").unwrap_or_else(|_| std::env::var("HOME").unwrap_or_default());
         
         let dir_markers = ["dir:", "path:"];
         let mut found_dir = false;
@@ -150,7 +153,7 @@ impl SystemRouter {
                 
                 let mut dir_val = String::new();
                 let mut chars_to_consume = 0;
-
+                
                 if rest_orig.starts_with('"') {
                     if let Some(end_idx) = rest_orig[1..].find('"') {
                         dir_val = rest_orig[1..=end_idx].to_string(); 
@@ -181,7 +184,8 @@ impl SystemRouter {
                     
                     while !candidate.is_empty() {
                         let expanded_cand = candidate.replace("~", &home_dir);
-                        if std::path::Path::new(&expanded_cand).is_dir() {
+                        let path_obj = std::path::Path::new(&expanded_cand);
+                        if path_obj.is_dir() {
                             dir_val = candidate.clone();
                             chars_to_consume = candidate.len();
                             found_valid_dir = true;
@@ -193,14 +197,14 @@ impl SystemRouter {
                             let parent_len = last_slash + 1;
                             let parent = &candidate[..parent_len];
                             let expanded_parent = parent.replace("~", &home_dir);
-                            if std::path::Path::new(&expanded_parent).is_dir() {
+                            let parent_obj = std::path::Path::new(&expanded_parent);
+                            if parent_obj.is_dir() {
                                 dir_val = parent.to_string();
                                 chars_to_consume = parent_len;
                                 found_valid_dir = true;
                                 break;
                             }
                         }
-
                         if let Some(last_space) = candidate.rfind(' ') {
                             candidate = candidate[..last_space].to_string();
                         } else {
@@ -219,7 +223,10 @@ impl SystemRouter {
                     }
                 }
                 
-                search_query.directory_filter = Some(dir_val.replace("~", &home_dir).trim().to_string());
+                // FIX: Canonicalize path so symlinks match database IDs correctly!
+                let expanded_dir = dir_val.replace("~", &home_dir).trim().to_string();
+                let canonical_dir = std::path::Path::new(&expanded_dir).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(&expanded_dir));
+                search_query.directory_filter = Some(canonical_dir.to_string_lossy().to_string());
                 
                 let before = &current_query[..start];
                 let after = &current_query[val_start + chars_to_consume..];
@@ -242,14 +249,18 @@ impl SystemRouter {
                     .or_else(|| rest_orig.to_lowercase().find(" since:"))
                     .or_else(|| rest_orig.to_lowercase().find(" before:"))
                     .unwrap_or(rest_orig.len());
-                    
+                
                 let raw_unquoted = rest_orig[..next_marker_pos].trim();
                 let mut candidate = raw_unquoted.to_string();
                 
                 while !candidate.is_empty() {
                     let expanded_cand = candidate.replace("~", &home_dir);
-                    if std::path::Path::new(&expanded_cand).is_dir() {
-                        search_query.directory_filter = Some(expanded_cand.trim().to_string());
+                    let path_obj = std::path::Path::new(&expanded_cand);
+                    if path_obj.is_dir() {
+                        // FIX: Canonicalize path so symlinks match database IDs correctly!
+                        let canonical_dir = path_obj.canonicalize().unwrap_or_else(|_| path_obj.to_path_buf());
+                        search_query.directory_filter = Some(canonical_dir.to_string_lossy().trim().to_string());
+                        
                         let before = &current_query[..start];
                         let after = &current_query[start + candidate.len()..];
                         current_query = format!("{} {}", before, after);
@@ -260,15 +271,18 @@ impl SystemRouter {
                         let parent_len = last_slash + 1;
                         let parent = &candidate[..parent_len];
                         let expanded_parent = parent.replace("~", &home_dir);
-                        if std::path::Path::new(&expanded_parent).is_dir() {
-                            search_query.directory_filter = Some(expanded_parent.trim().to_string());
+                        let parent_obj = std::path::Path::new(&expanded_parent);
+                        if parent_obj.is_dir() {
+                            // FIX: Canonicalize path so symlinks match database IDs correctly!
+                            let canonical_parent = parent_obj.canonicalize().unwrap_or_else(|_| parent_obj.to_path_buf());
+                            search_query.directory_filter = Some(canonical_parent.to_string_lossy().trim().to_string());
+                            
                             let before = &current_query[..start];
                             let after = &current_query[start + parent_len..];
                             current_query = format!("{} {}", before, after);
                             break;
                         }
                     }
-
                     if let Some(last_space) = candidate.rfind(' ') {
                         candidate = candidate[..last_space].to_string();
                     } else {
@@ -302,7 +316,6 @@ impl SystemRouter {
         }
         
         search_query.raw_text = clean_text_parts.join(" ");
-
         let mut dynamic_fs_results = Vec::new();
         
         // Dynamically invoke a live unindexed directory crawl if the router captures a path marker.
@@ -364,7 +377,7 @@ impl SystemRouter {
             }
         }
 
-        let filetypes = vec!["pdf", "docx", "txt", "csv", "png", "jpg", "xlsx", "directory"];
+        let filetypes = vec!["pdf", "docx", "doc", "txt", "csv", "png", "jpg", "xlsx", "xls", "pptx", "odt", "ods", "odp", "directory"];
         for ft in &filetypes {
             if search_query.raw_text.to_lowercase().contains(ft) {
                 search_query.metadata_filters.insert("filetype".to_string(), ft.to_string());
@@ -422,8 +435,8 @@ impl SystemRouter {
         );
         
         println!("[Router DEBUG] LLM intent determination took: {:.2?}", intent_start.elapsed());
-        let phase_start = Instant::now();
 
+        let phase_start = Instant::now();
         match intent {
             LlmIntent::Skip => {
                 send_chunk(serde_json::json!({"status": "done"}).to_string());
@@ -561,6 +574,7 @@ impl SystemRouter {
                     "mode": "llm_enhanced",
                     "results": final_payload
                 }).to_string());
+
                 println!("[Router DEBUG] RefineSearch Intent finished in {:.2?} (Returned {} results)", phase_start.elapsed(), final_payload.len());
             },
             
@@ -601,6 +615,7 @@ impl SystemRouter {
                     "synthesis_result": answer_json,
                     "results": final_payload
                 }).to_string());
+
                 println!("[Router DEBUG] SynthesizeAnswer Intent finished in {:.2?} (Returned {} results)", phase_start.elapsed(), final_payload.len());
             }
         }
