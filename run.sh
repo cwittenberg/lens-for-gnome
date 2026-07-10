@@ -15,13 +15,13 @@ if [ "$NEEDS_DEPS" -eq 1 ] || [[ "$1" == "--setup" ]]; then
     echo "-> CRITICAL: Missing SDK build tools (Vulkan / GTK4 / SPIR-V). Auto-installing..."
     if command -v apt-get &> /dev/null; then
         sudo apt-get update
-        sudo apt-get install -y spirv-headers spirv-tools glslang-tools glslang-dev libvulkan-dev cmake build-essential tesseract-ocr ffmpeg poppler-utils libgtk-4-dev pkg-config
+        sudo apt-get install -y spirv-headers spirv-tools glslang-tools glslang-dev libvulkan-dev cmake build-essential tesseract-ocr ffmpeg poppler-utils libgtk-4-dev pkg-config libnotify-bin
     elif command -v dnf &> /dev/null; then
-        sudo dnf install -y spirv-headers spirv-tools glslang glslang-devel vulkan-loader-devel cmake gcc-c++ tesseract ffmpeg poppler-utils gtk4-devel pkgconf-pkg-config
+        sudo dnf install -y spirv-headers spirv-tools glslang glslang-devel vulkan-loader-devel cmake gcc-c++ tesseract ffmpeg poppler-utils gtk4-devel pkgconf-pkg-config libnotify
     elif command -v pacman &> /dev/null; then
-        sudo pacman -Syu --needed --noconfirm spirv-headers spirv-tools glslang vulkan-headers vulkan-icd-loader cmake base-devel tesseract tesseract-data-eng ffmpeg poppler gtk4 pkgconf
+        sudo pacman -Syu --needed --noconfirm spirv-headers spirv-tools glslang vulkan-headers vulkan-icd-loader cmake base-devel tesseract tesseract-data-eng ffmpeg poppler gtk4 pkgconf libnotify
     elif command -v zypper &> /dev/null; then
-        sudo zypper install -y spirv-headers spirv-tools glslang glslang-devel vulkan-devel cmake gcc-c++ tesseract-ocr ffmpeg poppler-tools gtk4-devel pkgconf
+        sudo zypper install -y spirv-headers spirv-tools glslang glslang-devel vulkan-devel cmake gcc-c++ tesseract-ocr ffmpeg poppler-tools gtk4-devel pkgconf libnotify-tools
     else
         echo "Error: Unsupported package manager. Please manually install Vulkan and GTK4 dev tools."
         exit 1
@@ -130,7 +130,7 @@ if [ -f "$STATE_FILE" ]; then
 fi
 
 if [ "$BACKEND_NAME" != "$LAST_TARGET" ] || [ "$1" == "--clean" ]; then
-    echo "-> Target changed or clean requested. Nuking C++ build artifacts..."
+    echo "-> Target changed or clean requested. Nuking C++ build artifacts...\"\n"
     rm -rf target/release/build/llama-cpp* target/debug/build/llama-cpp*
     cargo clean
     echo "$BACKEND_NAME" > "$STATE_FILE"
@@ -148,6 +148,17 @@ export RUSTFLAGS="-L /usr/local/cuda/lib64 -L /usr/lib/x86_64-linux-gnu -L /opt/
 if ! cargo build --release $CARGO_FEATURES; then
     echo "-> CRITICAL: Cargo build failed! Aborting run sequence to prevent executing an outdated, broken binary."
     exit 1
+fi
+
+echo "-> Checking if GNOME Shell extension is enabled..."
+EXT_ENABLED=$(gsettings get org.gnome.shell enabled-extensions 2>/dev/null || dconf read /org/gnome/shell/enabled-extensions 2>/dev/null || echo "")
+if [[ "$EXT_ENABLED" != *"lens-for-gnome@cwittenberg"* ]]; then
+    echo "   [!] Extension missing or disabled. Prompting user..."
+    ICON_PATH=$(readlink -f metadata/io.github.cwittenberg.Lens.icon.svg)
+    notify-send -a "Lens for GNOME" "Lens for GNOME" "The GNOME Shell extension is missing or disabled. Please enable it in your browser." -i "$ICON_PATH" || true
+    gio open "https://extensions.gnome.org/?search=lens-for-gnome" || xdg-open "https://extensions.gnome.org/?search=lens-for-gnome" || true
+else
+    echo "   [OK] Extension is enabled."
 fi
 
 echo "-> Stopping any existing instances..."

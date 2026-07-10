@@ -182,14 +182,32 @@ impl VisionEngine {
 
     fn extract_qr(&self, path: &str) -> String {
         if let Ok(img) = image::open(path) {
-            let gray_img = img.to_luma8();
-            let mut prepared = rqrr::PreparedImage::prepare(gray_img);
-            let grids = prepared.detect_grids();
-            for grid in grids {
-                if let Ok((_meta, decoded_content)) = grid.decode() {
-                    return decoded_content;
-                }
+            let (width, height) = img.dimensions();
+            
+            // Protective bounds check to prevent rqrr from attempting to scan tiny/corrupted images.
+            // Minimum QR version 1 size is 21x21 modules + quiet zone.
+            if width < 50 || height < 50 {
+                return String::new();
             }
+
+            let gray_img = img.to_luma8();
+            
+            // The `rqrr` crate has an internal bug where specific noise patterns trigger 
+            // an `assertion failed: scan >= 1` panic inside `grid.rs`. 
+            // Because we run in a Rayon parallel worker thread pool, unhandled panics will 
+            // tear down the worker and stall the entire ingestion batch. Catch it safely.
+            let result = std::panic::catch_unwind(|| {
+                let mut prepared = rqrr::PreparedImage::prepare(gray_img);
+                let grids = prepared.detect_grids();
+                for grid in grids {
+                    if let Ok((_meta, decoded_content)) = grid.decode() {
+                        return decoded_content;
+                    }
+                }
+                String::new()
+            });
+
+            return result.unwrap_or_default();
         }
         String::new()
     }

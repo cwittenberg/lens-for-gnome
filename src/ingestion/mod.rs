@@ -1,3 +1,4 @@
+// src/ingestion/mod.rs
 pub mod plaintext;
 pub mod csv_file;
 pub mod pdf;
@@ -22,7 +23,6 @@ use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
 use crate::vector::VectorStore;
 use crate::engine::RuntimeAdapter;
 
-// Configurable global limit for text extraction per document
 const MAX_DOC_BYTES: usize = 256_000;
 
 pub trait FileExtractor: Send + Sync {
@@ -30,7 +30,6 @@ pub trait FileExtractor: Send + Sync {
     fn extract(&self, path: &Path) -> Result<String, String>;
 }
 
-// Ingestor Active Status Container Block
 pub struct IndexerProgressState {
     pub is_running: Arc<AtomicBool>,
     pub current_target: Arc<Mutex<String>>,
@@ -96,7 +95,6 @@ impl IngestionPipeline {
         let mut options = InitOptions::default();
         options.model_name = EmbeddingModel::ParaphraseMLMiniLML12V2;
         options.show_download_progress = true;
-        // Explicitly map the download path to the writable shared data directory
         options.cache_dir = runtime_adapter.data_dir().join("fastembed_cache");
 
         let ai_model = TextEmbedding::try_new(options)
@@ -292,7 +290,6 @@ impl IngestionPipeline {
             path.extension().and_then(|e| e.to_str()).unwrap_or("unknown").to_lowercase()
         };
 
-        // If the file has already been ingested and purged for security, immediately bypass to prevent wiping the rich DB state
         if path.is_file() && ext == "eml" {
             let mut buffer = [0; 23];
             if let Ok(mut f) = std::fs::File::open(path) {
@@ -392,7 +389,6 @@ impl IngestionPipeline {
                     metadata
                 );
 
-                // SECURE PURGE: Tombstone the EML file to prevent data exfiltration
                 if path_str.starts_with(&self.mail_dir) && path_str.ends_with(".eml") && !is_shallow {
                     if let Ok(mut f) = std::fs::OpenOptions::new().write(true).truncate(true).open(&path_str) {
                         let _ = f.write_all(b"[LENS_SECURE_TOMBSTONE]");
@@ -423,6 +419,40 @@ impl IngestionPipeline {
         name.starts_with('.') || self.blacklist.contains(&name.to_string())
     }
 
+    fn notify_user(title: &str, body: &str) {
+        let icon_path = std::env::var("SNAP")
+            .map(|snap| format!("{}/usr/share/pixmaps/lens-for-gnome.svg", snap))
+            .unwrap_or_else(|_| {
+                let local_path = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("metadata/io.github.cwittenberg.Lens.icon.svg");
+                if local_path.exists() {
+                    local_path.canonicalize().unwrap_or(local_path).to_string_lossy().to_string()
+                } else {
+                    "lens-for-gnome".to_string()
+                }
+            });
+
+        let mut gdbus = std::process::Command::new("gdbus");
+        gdbus.args(&[
+            "call", "--session",
+            "--dest", "org.freedesktop.Notifications",
+            "--object-path", "/org/freedesktop/Notifications",
+            "--method", "org.freedesktop.Notifications.Notify",
+            "--",
+            &format!("'{}'", "Lens for GNOME"),
+            "uint32 0",
+            &format!("'{}'", icon_path),
+            &format!("'{}'", title.replace('\'', "")),
+            &format!("'{}'", body.replace('\'', "")),
+            "@as []",
+            "@a{sv} {}",
+            "int32 -1"
+        ]);
+        
+        let _ = gdbus.spawn();
+    }
+
     pub fn run_indexer(&self, target_dirs: Vec<String>, max_depth: usize) {
         self.progress.is_running.store(true, Ordering::Relaxed);
         self.progress.deep_processed.store(0, Ordering::Relaxed);
@@ -433,7 +463,7 @@ impl IngestionPipeline {
         let db_state = self.store.get_all_document_timestamps();
         let mut missing_or_modified = Vec::new();
 
-        for target_dir in target_dirs {
+        for target_dir in &target_dirs {
             {
                 let mut tgt = match self.progress.current_target.lock() {
                     Ok(guard) => guard,
@@ -445,7 +475,7 @@ impl IngestionPipeline {
             
             println!("Scanning for missing or modified files in: {} (Max Depth: {})", target_dir, max_depth);
             
-            for entry in WalkDir::new(&target_dir)
+            for entry in WalkDir::new(target_dir)
                 .max_depth(max_depth)
                 .follow_links(true) 
                 .into_iter()
@@ -493,15 +523,27 @@ impl IngestionPipeline {
         if missing_or_modified.is_empty() {
             println!("[Indexer] Reconciliation complete. No missing files found from offline period.");
         } else {
-            println!("[Indexer] Reconciliation found {} missing or modified files. Indexing now in sequential batches...", missing_or_modified.len());
+            let file_count = missing_or_modified.len();
+            let dir_count = target_dirs.len();
             
-            self.progress.total_files.store(missing_or_modified.len(), Ordering::Relaxed);
+            println!("[Indexer] Reconciliation found {} missing or modified files. Indexing now in sequential batches...", file_count);
+            
+            let should_notify = dir_count == 1 || file_count > 25;
+            
+            if should_notify {
+                let start_msg = if dir_count == 1 {
+                    format!("Started indexation for '{}' ({} items).", target_dirs[0], file_count)
+                } else {
+                    format!("Started bulk indexation across {} directories ({} items).", dir_count, file_count)
+                };
+                Self::notify_user("Lens Indexer", &start_msg);
+            }
+            
+            self.progress.total_files.store(file_count, Ordering::Relaxed);
             self.progress.write_flush();
             
-            // Reduced to 12 from 64 to entirely prevent parallelized Vision OCR deadlocks
-            // and keep system resources fluid during background execution.
             let batch_size = 12; 
-            let total_batches = (missing_or_modified.len() as f64 / batch_size as f64).ceil() as usize;
+            let total_batches = (file_count as f64 / batch_size as f64).ceil() as usize;
 
             for (batch_idx, chunk) in missing_or_modified.chunks(batch_size).enumerate() {
                 if !self.progress.is_running.load(Ordering::Relaxed) {
@@ -524,7 +566,6 @@ impl IngestionPipeline {
                             println!("[Indexer] Extracted (Deep/AI Queued): {}", filename);
                         }
                     } else {
-                        // The file was unmodified or already tracked in this edge case iteration
                         self.progress.shallow_processed.fetch_add(1, Ordering::Relaxed);
                         println!("[Indexer] Skipped (Unmodified/Already Indexed): {}", filename);
                     }
@@ -532,8 +573,6 @@ impl IngestionPipeline {
                     doc_opt.map(|d| (d, filename))
                 }).collect();
 
-                // By writing the flush here immediately after the file extraction phase, 
-                // the UI progress bar advances perfectly without waiting for the slow AI embeddings block.
                 self.progress.write_flush();
 
                 if prepared_docs.is_empty() { 
@@ -575,7 +614,6 @@ impl IngestionPipeline {
                             println!("[Indexer] Embedded (Deep): {}", filename);
                             v
                         } else {
-                            // Fallback state keeps the progress totals perfectly matched to total_files
                             self.progress.deep_processed.fetch_add(1, Ordering::Relaxed);
                             println!("[Indexer] Processed (Deep/Fallback): {}", filename);
                             vec![0.0; 384]
@@ -585,7 +623,6 @@ impl IngestionPipeline {
                     final_docs.push((doc.0, doc.1, vector, doc.3, doc.4));
                 }
 
-                // Isolate the EML paths that need to be tombstoned before we move ownership to the DB
                 let eml_paths: Vec<String> = final_docs.iter()
                     .filter(|(path, _, vector, _, _)| {
                         let is_shallow = vector.iter().all(|&v| v == 0.0);
@@ -596,7 +633,6 @@ impl IngestionPipeline {
 
                 self.store.insert_documents(final_docs);
 
-                // SECURE PURGE
                 for path_str in eml_paths {
                     if let Ok(mut f) = std::fs::OpenOptions::new().write(true).truncate(true).open(&path_str) {
                         let _ = f.write_all(b"[LENS_SECURE_TOMBSTONE]");
@@ -611,6 +647,15 @@ impl IngestionPipeline {
                 }
 
                 self.progress.write_flush();
+            }
+            
+            if should_notify {
+                let end_msg = if dir_count == 1 {
+                    format!("Finished indexing '{}'.", target_dirs[0])
+                } else {
+                    format!("Finished bulk indexation of {} items.", file_count)
+                };
+                Self::notify_user("Lens Indexer", &end_msg);
             }
         }
         

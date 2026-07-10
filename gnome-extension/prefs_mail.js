@@ -23,7 +23,7 @@ class MailConfigManager {
         this.settings = settings;
         this.pollId = null;
         this._timeoutIds = [];
-        this._managedWidgets = [];
+        this._managedConnections = [];
 
         this.buildUI();
         this.loadExistingConfig();
@@ -34,9 +34,10 @@ class MailConfigManager {
         return id;
     }
 
-    _trackWidget(widget) {
-        this._managedWidgets.push(widget);
-        return widget;
+    _trackConnection(widget, signalId) {
+        if (signalId > 0) {
+            this._managedConnections.push({ widget, signalId });
+        }
     }
 
     buildUI() {
@@ -45,16 +46,19 @@ class MailConfigManager {
             description: 'Sync your Gmail inbox locally for instant, private semantic search. Because Google enforces strict security, you must use an App Password, not your standard account password.'
         });
 
-        const helpRow = this._trackWidget(new Adw.ActionRow({
+        const helpRow = new Adw.ActionRow({
             title: 'How to get an App Password',
             subtitle: 'Go to Google Account -> Security -> 2-Step Verification -> App Passwords.',
             activatable: true
-        }));
+        });
         const helpIcon = new Gtk.Image({ icon_name: 'external-link-symbolic', valign: Gtk.Align.CENTER });
         helpRow.add_suffix(helpIcon);
-        helpRow.connect('activated', () => {
+        
+        let helpSig = helpRow.connect('activated', () => {
             Gio.AppInfo.launch_default_for_uri('https://myaccount.google.com/apppasswords', null);
         });
+        this._trackConnection(helpRow, helpSig);
+        
         this.gmailGroup.add(helpRow);
 
         this.emailRow = new Adw.EntryRow({
@@ -63,13 +67,14 @@ class MailConfigManager {
         });
         
         // INSTANTLY strip spaces on paste/type
-        this.emailRow.connect('notify::text', () => {
+        let emailSig = this.emailRow.connect('notify::text', () => {
             let current = this.emailRow.get_text() || '';
             let cleaned = cleanString(current);
             if (current !== cleaned) {
                 this.emailRow.set_text(cleaned);
             }
         });
+        this._trackConnection(this.emailRow, emailSig);
         
         this.gmailGroup.add(this.emailRow);
 
@@ -79,13 +84,15 @@ class MailConfigManager {
         });
         
         // INSTANTLY strip spaces, newlines, and carriage returns on paste
-        this.passwordRow.connect('notify::text', () => {
+        let passSig = this.passwordRow.connect('notify::text', () => {
             let current = this.passwordRow.get_text() || '';
             let cleaned = cleanString(current);
             if (current !== cleaned) {
                 this.passwordRow.set_text(cleaned);
             }
         });
+        this._trackConnection(this.passwordRow, passSig);
+        
         this.gmailGroup.add(this.passwordRow);
 
         this.historyRow = new Adw.SpinRow({
@@ -117,18 +124,20 @@ class MailConfigManager {
         });
         this.statusLabel.add_css_class('dim-label');
 
-        const clearBtn = this._trackWidget(new Gtk.Button({
+        const clearBtn = new Gtk.Button({
             label: 'Clear',
             valign: Gtk.Align.CENTER
-        }));
-        clearBtn.connect('clicked', () => this.clearConfig());
+        });
+        let clearSig = clearBtn.connect('clicked', () => this.clearConfig());
+        this._trackConnection(clearBtn, clearSig);
 
-        const saveBtn = this._trackWidget(new Gtk.Button({
+        const saveBtn = new Gtk.Button({
             label: 'Save & Authenticate',
             valign: Gtk.Align.CENTER
-        }));
+        });
         saveBtn.add_css_class('suggested-action');
-        saveBtn.connect('clicked', () => this.saveConfig());
+        let saveSig = saveBtn.connect('clicked', () => this.saveConfig());
+        this._trackConnection(saveBtn, saveSig);
 
         buttonBox.append(this.statusLabel);
         buttonBox.append(clearBtn);
@@ -168,14 +177,16 @@ class MailConfigManager {
             title: 'Force Re-Sync',
             subtitle: 'Forget the last indexed date and download emails from the configured history limit again.'
         });
-        this.resyncBtn = this._trackWidget(new Gtk.Button({
+        
+        this.resyncBtn = new Gtk.Button({
             icon_name: 'view-refresh-symbolic',
             valign: Gtk.Align.CENTER,
             margin_end: 8,
             tooltip_text: 'Reset state and Re-Sync'
-        }));
+        });
         this.resyncBtn.add_css_class('suggested-action');
-        this.resyncBtn.connect('clicked', () => {
+        
+        let resyncSig = this.resyncBtn.connect('clicked', () => {
             this.resyncBtn.set_sensitive(false);
             sendDaemonCommand({ action: 'mail_resync' }, (data) => {
                 this._registerTimeout(GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
@@ -184,6 +195,8 @@ class MailConfigManager {
                 }));
             });
         });
+        this._trackConnection(this.resyncBtn, resyncSig);
+        
         this.resyncRow.add_suffix(this.resyncBtn);
         this.dataGroup.add(this.resyncRow);
 
@@ -191,14 +204,16 @@ class MailConfigManager {
             title: 'Wipe Local Mail Data',
             subtitle: 'Permanently delete all downloaded .eml files and immediately remove them from the search index.'
         });
-        this.wipeBtn = this._trackWidget(new Gtk.Button({
+        
+        this.wipeBtn = new Gtk.Button({
             icon_name: 'edit-clear-all-symbolic',
             valign: Gtk.Align.CENTER,
             margin_end: 8,
             tooltip_text: 'Wipe Mail Data'
-        }));
+        });
         this.wipeBtn.add_css_class('destructive-action');
-        this.wipeBtn.connect('clicked', () => {
+        
+        let wipeSig = this.wipeBtn.connect('clicked', () => {
             this.wipeBtn.set_sensitive(false);
             sendDaemonCommand({ action: 'mail_wipe' }, (data) => {
                 this._registerTimeout(GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
@@ -207,6 +222,8 @@ class MailConfigManager {
                 }));
             });
         });
+        this._trackConnection(this.wipeBtn, wipeSig);
+        
         this.wipeRow.add_suffix(this.wipeBtn);
         this.dataGroup.add(this.wipeRow);
 
@@ -355,12 +372,12 @@ class MailConfigManager {
             this._timeoutIds = [];
         }
         
-        for (let widget of this._managedWidgets) {
-            if (widget) {
-                widget.disconnectObject(this);
+        for (let conn of this._managedConnections) {
+            if (conn.widget && conn.signalId > 0) {
+                conn.widget.disconnect(conn.signalId);
             }
         }
-        this._managedWidgets = [];
+        this._managedConnections = [];
     }
 }
 

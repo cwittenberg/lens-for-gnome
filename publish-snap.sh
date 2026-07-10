@@ -33,8 +33,6 @@ if ! id -nG "$USER" | grep -qw "lxd"; then
 fi
 
 # 5. Clean up legacy snap/gui
-# Snapcraft's legacy linter aggressively rewrites desktop files placed here.
-# Deleting this forces Snapcraft to use our manually generated file below.
 if [ -d "snap/gui" ]; then
     echo "Cleaning up legacy snap/gui directory..."
     rm -rf snap/gui
@@ -78,6 +76,8 @@ apps:
       - removable-media
       - gsettings
       - hardware-observe
+      - desktop
+      - desktop-legacy
   manager:
     command: bin/lens-for-gnome-manager
     extensions: [gnome]
@@ -89,6 +89,8 @@ apps:
       - opengl
       - removable-media
       - hardware-observe
+      - desktop
+      - desktop-legacy
 
 parts:
   lens-for-gnome:
@@ -118,6 +120,7 @@ parts:
       - libssl3
       - procps
       - dconf-cli
+      - libnotify-bin
     prime:
       - "-usr/lib/*/libharfbuzz*"
       - "-usr/lib/*/librsvg*"
@@ -147,20 +150,16 @@ parts:
       - "-usr/lib/*/libpulse-simple*"
       - "-usr/lib/*/libssl3.so"
     override-build: |
-      # 1. Prevent the GNOME SDK from crashing the Rust binaries
       ORIGINAL_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
       unset LD_LIBRARY_PATH
       
-      # 2. Force rustup to explicitly configure and select the stable toolchain globally
       rustup default stable
       rustup toolchain install stable --component rustc,cargo
       
       cd $CRAFT_PART_SRC
       
-      # FIX STALE BUILD CACHE: Nuke intermediate broken CMake configs from previous failure runs
       rm -rf target/release/build/llama-cpp* target/debug/build/llama-cpp*
       
-      # 3. Build the backend and frontend with Universal Vulkan GPU Acceleration
       export CMAKE_GENERATOR="Unix Makefiles"
       export LLAMA_VULKAN=1
       export GGML_VULKAN=1
@@ -170,25 +169,19 @@ parts:
       
       export LD_LIBRARY_PATH="$ORIGINAL_LD_LIBRARY_PATH"
       
-      # 4. Stage binaries
       mkdir -p $CRAFT_PART_INSTALL/bin
       cp target/release/lens-for-gnome $CRAFT_PART_INSTALL/bin/
       cp target/release/lens-for-gnome-manager $CRAFT_PART_INSTALL/bin/
       
-      # 4.5 Stage schemas natively into GLib's expected XDG paths!
-      # This prevents AppArmor from scrubbing GSETTINGS_SCHEMA_DIR overrides
-      # and allows gsettings to find the schema natively via the snap's XDG_DATA_DIRS.
       mkdir -p $CRAFT_PART_INSTALL/usr/share/glib-2.0/schemas
       cp -r gnome-extension/schemas/* $CRAFT_PART_INSTALL/usr/share/glib-2.0/schemas/
       glib-compile-schemas $CRAFT_PART_INSTALL/usr/share/glib-2.0/schemas/
       
-      # 5. FIX ICON MISSING CRASH: Bypass the theme linter by hardcoding the pixmaps directory
       mkdir -p $CRAFT_PART_INSTALL/usr/share/applications
       mkdir -p $CRAFT_PART_INSTALL/usr/share/pixmaps
       
       cp metadata/io.github.cwittenberg.Lens.icon.svg $CRAFT_PART_INSTALL/usr/share/pixmaps/lens-for-gnome.svg
       
-      # 6. Generate the Desktop file natively with the absolute ${SNAP} path
       echo "[Desktop Entry]" > $CRAFT_PART_INSTALL/usr/share/applications/lens-for-gnome.desktop
       echo "Version=1.0" >> $CRAFT_PART_INSTALL/usr/share/applications/lens-for-gnome.desktop
       echo "Type=Application" >> $CRAFT_PART_INSTALL/usr/share/applications/lens-for-gnome.desktop
@@ -199,17 +192,22 @@ parts:
       echo "StartupNotify=true" >> $CRAFT_PART_INSTALL/usr/share/applications/lens-for-gnome.desktop
       echo "Categories=Utility;" >> $CRAFT_PART_INSTALL/usr/share/applications/lens-for-gnome.desktop
       
-      # 7. Generate the wrapper script for the background user daemon
       echo '#!/bin/bash' > $CRAFT_PART_INSTALL/bin/start-daemon.sh
       echo 'mkdir -p "$HOME/.local/state/lens-for-gnome"' >> $CRAFT_PART_INSTALL/bin/start-daemon.sh
+      
+      echo 'EXT_ENABLED=$(gsettings get org.gnome.shell enabled-extensions 2>/dev/null || dconf read /org/gnome/shell/enabled-extensions 2>/dev/null || echo "")' >> $CRAFT_PART_INSTALL/bin/start-daemon.sh
+      echo 'if [[ "$EXT_ENABLED" != *"lens-for-gnome@cwittenberg"* ]]; then' >> $CRAFT_PART_INSTALL/bin/start-daemon.sh
+      echo "    gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.Notify -- \"'Lens for GNOME'\" \"uint32 0\" \"'\$SNAP/usr/share/pixmaps/lens-for-gnome.svg'\" \"'Lens for GNOME'\" \"'The GNOME Shell extension is missing or disabled. Please enable it in your browser.'\" \"@as []\" \"@a{sv} {}\" \"int32 -1\" || true" >> $CRAFT_PART_INSTALL/bin/start-daemon.sh
+      echo '    gio open "https://extensions.gnome.org/?search=lens-for-gnome" || true' >> $CRAFT_PART_INSTALL/bin/start-daemon.sh
+      echo 'fi' >> $CRAFT_PART_INSTALL/bin/start-daemon.sh
+      
       echo 'export GSETTINGS_SCHEMA_DIR="$SNAP/usr/share/glib-2.0/schemas"' >> $CRAFT_PART_INSTALL/bin/start-daemon.sh
-      echo '"$SNAP/bin/lens-for-gnome" 2>&1 | tee "$HOME/.local/state/lens-for-gnome/daemon.log"' >> $CRAFT_PART_INSTALL/bin/start-daemon.sh
+      echo 'exec "$SNAP/bin/lens-for-gnome" 2>&1 | tee "$HOME/.local/state/lens-for-gnome/daemon.log"' >> $CRAFT_PART_INSTALL/bin/start-daemon.sh
       chmod +x $CRAFT_PART_INSTALL/bin/start-daemon.sh
 EOF
 
 echo "Building Snap package..."
 
-# 6. Targeted execution
 if sg lxd -c "lxc list" &> /dev/null; then
     sg lxd -c "snapcraft pack"
 else
@@ -224,13 +222,4 @@ echo "Build complete."
 echo ""
 echo "To test locally:"
 echo "Run: sudo snap install --dangerous lens-for-gnome_0.4.5_amd64.snap"
-echo ""
-echo "NETWORK DRIVE MOUNT INSTRUCTIONS:"
-echo "Strict confinement disables network mount access by default."
-echo "To allow Lens for GNOME to index /mnt and /media, run:"
-echo "sudo snap connect lens-for-gnome:removable-media"
-echo ""
-echo "To publish automatically without human review:"
-echo "1. Run: snapcraft login"
-echo "2. Run: snapcraft upload --release=stable lens-for-gnome_0.4.5_amd64.snap"
 echo "=========================================================="

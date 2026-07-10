@@ -11,13 +11,6 @@ use serde_json::{json, Value};
 pub struct ModelManager;
 
 impl ModelManager {
-    /// Bootstraps the application configuration and handles default deployment.
-    ///
-    /// Existing user configs are preserved:
-    /// - Existing active_model is kept if it still points to a known model.
-    /// - Existing model entries are not overwritten.
-    /// - Missing default models are added automatically.
-    /// - Missing fields inside existing default model entries are filled in.
     pub fn setup_model_config() -> Value {
         let home = env::var("HOME").expect("HOME environment variable must be set");
         let config_dir = format!("{}/.config/lens-for-gnome", home);
@@ -57,7 +50,6 @@ impl ModelManager {
         merged_config
     }
 
-    /// Fetches the config and dynamically injects the `is_installed` status for the frontend.
     pub fn get_full_config() -> Value {
         let mut config = Self::setup_model_config();
         let home = env::var("HOME").unwrap_or_default();
@@ -76,7 +68,6 @@ impl ModelManager {
         config
     }
 
-    /// Resolves the absolute path, URL, and architecture flags of the currently active model.
     pub fn get_active_model_details() -> (String, String, bool) {
         let parsed_config = Self::setup_model_config();
         let fallback_config = Self::default_model_config();
@@ -100,7 +91,6 @@ impl ModelManager {
             .as_str()
             .unwrap_or("https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf");
 
-        // Gracefully clean markdown formatted links from legacy configs
         let mut safe_url = url.to_string();
         if safe_url.starts_with('[') && safe_url.contains("](") {
             if let Some(idx) = safe_url.find("](") {
@@ -118,8 +108,40 @@ impl ModelManager {
         (model_path, safe_url, supports_cot)
     }
 
-    /// Validates the model exists on disk, falling back to a blocking sync download.
-    /// Broadcasts progress to standard logs and the provided status_tracker.
+    fn notify_user(title: &str, body: &str) {
+        let icon_path = std::env::var("SNAP")
+            .map(|snap| format!("{}/usr/share/pixmaps/lens-for-gnome.svg", snap))
+            .unwrap_or_else(|_| {
+                let local_path = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("metadata/io.github.cwittenberg.Lens.icon.svg");
+                if local_path.exists() {
+                    local_path.canonicalize().unwrap_or(local_path).to_string_lossy().to_string()
+                } else {
+                    "lens-for-gnome".to_string()
+                }
+            });
+
+        let mut gdbus = std::process::Command::new("gdbus");
+        gdbus.args(&[
+            "call", "--session",
+            "--dest", "org.freedesktop.Notifications",
+            "--object-path", "/org/freedesktop/Notifications",
+            "--method", "org.freedesktop.Notifications.Notify",
+            "--",
+            &format!("'{}'", "Lens for GNOME"),
+            "uint32 0",
+            &format!("'{}'", icon_path),
+            &format!("'{}'", title.replace('\'', "")),
+            &format!("'{}'", body.replace('\'', "")),
+            "@as []",
+            "@a{sv} {}",
+            "int32 -1"
+        ]);
+        
+        let _ = gdbus.spawn();
+    }
+
     pub fn ensure_model_available(model_path: &str, url: &str, status_tracker: Option<Arc<Mutex<String>>>) {
         if Self::model_file_exists(model_path) {
             return;
@@ -136,7 +158,6 @@ impl ModelManager {
         }
     }
 
-    /// Dynamic async-like downloader that parses cURL output and pipes it to the GNOME UI socket.
     pub fn download_model_if_needed<F>(
         model_id: &str,
         send_chunk: &mut F,
@@ -159,7 +180,8 @@ impl ModelManager {
             .as_str()
             .ok_or_else(|| format!("Model '{}' is missing required field: url", model_id))?;
 
-        // Gracefully clean markdown formatted links from legacy configs
+        let model_name = model_obj["name"].as_str().unwrap_or(model_id);
+
         let mut safe_url = url.to_string();
         if safe_url.starts_with('[') && safe_url.contains("](") {
             if let Some(idx) = safe_url.find("](") {
@@ -186,6 +208,9 @@ impl ModelManager {
             "message": "Connecting to model repository..."
         }).to_string());
 
+        let start_msg = format!("Downloading {}... This may take several minutes.", model_name);
+        Self::notify_user("AI Engine", &start_msg);
+
         let mut child = Command::new("curl")
             .arg("-L")
             .arg("--fail")
@@ -202,11 +227,14 @@ impl ModelManager {
             let mut current_line = String::new();
 
             for byte in stderr.bytes() {
-                // Check if the user cancelled the download via UI
                 if is_cancelled.load(std::sync::atomic::Ordering::Relaxed) {
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = fs::remove_file(&temp_model_path);
+                    
+                    let cancel_msg = format!("Download of {} was cancelled.", model_name);
+                    Self::notify_user("AI Engine", &cancel_msg);
+                        
                     return Err("Download cancelled by user.".to_string());
                 }
 
@@ -217,8 +245,6 @@ impl ModelManager {
 
                 if b == b'\r' || b == b'\n' {
                     if let Some(percent) = Self::parse_curl_progress_percent(&current_line) {
-                        // Fix for HuggingFace HTTP 302 Redirects which hit 100% on the redirect payload 
-                        // instantly, blocking subsequent updates for the real file payload.
                         if percent < last_reported && last_reported >= 95 && percent <= 5 {
                             last_reported = -1;
                         }
@@ -230,7 +256,6 @@ impl ModelManager {
                                 "message": format!("Downloading model ({}%)...", percent)
                             }).to_string());
 
-                            // Output to standard logger safely without spamming blob data
                             if percent % 5 == 0 || percent == 100 {
                                 println!("[LLM Download] Progress: {}%", percent);
                             }
@@ -252,6 +277,10 @@ impl ModelManager {
 
         if !status.success() {
             let _ = fs::remove_file(&temp_model_path);
+            
+            let fail_msg = format!("Failed to download {}. Check your internet connection.", model_name);
+            Self::notify_user("AI Engine", &fail_msg);
+                
             return Err("Download failed. Check internet connection or model URL.".to_string());
         }
 
@@ -265,11 +294,13 @@ impl ModelManager {
             "status": "processing",
             "message": "Model download completed."
         }).to_string());
+        
+        let success_msg = format!("{} download complete! AI search functions are now active.", model_name);
+        Self::notify_user("AI Engine", &success_msg);
 
         Ok(model_path)
     }
 
-    /// Persists the active model selection to the config block.
     pub fn set_active_model(model_id: &str) -> Result<(), String> {
         let home = env::var("HOME").map_err(|_| "HOME environment variable must be set".to_string())?;
         let config_path = format!("{}/.config/lens-for-gnome/models.json", home);
@@ -291,7 +322,6 @@ impl ModelManager {
         Ok(())
     }
 
-    /// Deletes the local GGUF file from the disk.
     pub fn delete_model(model_id: &str) -> Result<(), String> {
         let parsed = Self::setup_model_config();
         
@@ -514,6 +544,13 @@ impl ModelManager {
         let temp_model_path = format!("{}.download", model_path);
         let _ = fs::remove_file(&temp_model_path);
 
+        let parsed = Self::setup_model_config();
+        let active_key = parsed["active_model"].as_str().unwrap_or("qwen-2.5-3b");
+        let model_name = parsed["models"][active_key]["name"].as_str().unwrap_or("AI Model");
+
+        let start_msg = format!("Downloading {}... This may take several minutes.", model_name);
+        Self::notify_user("AI Engine", &start_msg);
+
         let mut child = Command::new("curl")
             .arg("-L")
             .arg("--fail")
@@ -542,11 +579,9 @@ impl ModelManager {
                         }
 
                         if percent > last_reported {
-                            // Print cleanly every 5% to standard systemd logs
                             if percent % 5 == 0 || percent == 100 {
                                 println!("[LLM Download] Progress: {}%", percent);
                             }
-                            // Broadcast dynamic updates globally for the LLM UI router to observe
                             if let Some(ref tracker) = status_tracker {
                                 if let Ok(mut guard) = tracker.lock() {
                                     *guard = format!("Downloading model: {}%", percent);
@@ -566,6 +601,10 @@ impl ModelManager {
 
         if !status.success() {
             let _ = fs::remove_file(&temp_model_path);
+            
+            let fail_msg = format!("Failed to download {}. Check your internet connection.", model_name);
+            Self::notify_user("AI Engine", &fail_msg);
+                
             return Err("Failed to download the model. Please check your internet connection or model URL.".to_string());
         }
 
@@ -574,6 +613,9 @@ impl ModelManager {
                 let _ = fs::remove_file(&temp_model_path);
                 format!("Failed to finalize downloaded model: {}", e)
             })?;
+
+        let success_msg = format!("{} download complete! AI search functions are now active.", model_name);
+        Self::notify_user("AI Engine", &success_msg);
 
         Ok(())
     }
