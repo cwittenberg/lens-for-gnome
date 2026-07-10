@@ -35,6 +35,8 @@ class SetupRequirementsDialog extends ModalDialog.ModalDialog {
             });
             this.contentLayout.add_child(daemonLabel);
 
+            let daemonBox = new St.BoxLayout({ vertical: false, style: 'spacing: 8px;' });
+
             let daemonEntry = new St.Entry({
                 text: getDaemonInstallCommand(),
                 can_focus: true,
@@ -45,7 +47,20 @@ class SetupRequirementsDialog extends ModalDialog.ModalDialog {
                 daemonEntry.clutter_text.set_selection(0, daemonEntry.get_text().length);
                 return Clutter.EVENT_PROPAGATE;
             }, this);
-            this.contentLayout.add_child(daemonEntry);
+            daemonBox.add_child(daemonEntry);
+
+            let daemonCopyBtn = new St.Button({
+                child: new St.Icon({ icon_name: 'edit-copy-symbolic', icon_size: 16 }),
+                style_class: 'button',
+                y_align: Clutter.ActorAlign.CENTER,
+                can_focus: true
+            });
+            daemonCopyBtn.connectObject('clicked', () => {
+                St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, daemonEntry.get_text());
+            }, this);
+            daemonBox.add_child(daemonCopyBtn);
+
+            this.contentLayout.add_child(daemonBox);
         }
 
         if (depsMissing) {
@@ -55,6 +70,8 @@ class SetupRequirementsDialog extends ModalDialog.ModalDialog {
                 style: 'font-weight: bold; margin-top: 12px; margin-bottom: 6px;'
             });
             this.contentLayout.add_child(depsLabel);
+
+            let depsBox = new St.BoxLayout({ vertical: false, style: 'spacing: 8px;' });
 
             let depsEntry = new St.Entry({
                 text: distroInfo.cmd,
@@ -66,7 +83,20 @@ class SetupRequirementsDialog extends ModalDialog.ModalDialog {
                 depsEntry.clutter_text.set_selection(0, depsEntry.get_text().length);
                 return Clutter.EVENT_PROPAGATE;
             }, this);
-            this.contentLayout.add_child(depsEntry);
+            depsBox.add_child(depsEntry);
+            
+            let depsCopyBtn = new St.Button({
+                child: new St.Icon({ icon_name: 'edit-copy-symbolic', icon_size: 16 }),
+                style_class: 'button',
+                y_align: Clutter.ActorAlign.CENTER,
+                can_focus: true
+            });
+            depsCopyBtn.connectObject('clicked', () => {
+                St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, depsEntry.get_text());
+            }, this);
+            depsBox.add_child(depsCopyBtn);
+
+            this.contentLayout.add_child(depsBox);
             
             let noteLabel = new St.Label({
                 text: 'Restart GNOME Shell after installing packages.',

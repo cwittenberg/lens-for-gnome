@@ -17,12 +17,12 @@
       "evidence": [
         {
           "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip:extension.js",
-          "line": 57,
+          "line": 59,
           "snippet": "St.Clipboard.get_default()"
         },
         {
           "path": "/home/christian/Development/extensions/gnome-lens/gnome-extension/build/lens-for-gnome@cwittenberg.shell-extension.zip:extension.js",
-          "line": 102,
+          "line": 95,
           "snippet": "St.Clipboard.get_default()"
         },
         {
