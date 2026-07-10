@@ -6,12 +6,14 @@ import GObject from 'gi://GObject';
 
 export const GnomeLensAdvancedFilters = GObject.registerClass(
 class GnomeLensAdvancedFilters extends St.BoxLayout {
+
     _init(callbacks) {
         super._init({
             style_class: 'lens-advanced-filters-box',
             vertical: true,
             visible: false,
         });
+
         this.callbacks = callbacks || {};
         this._isClearing = false;
         this._lastDirText = '';
@@ -55,6 +57,7 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
             { label: 'Past 30 Days', days: 30 },
             { label: 'This Year', days: 365 }
         ];
+
         this._activeDateOption = this._dateOptions[0];
         this._datePills = [];
 
@@ -64,13 +67,14 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         this._dateOptions.forEach(opt => {
             let label = new St.Label({ text: opt.label });
             label.clutter_text.ellipsize = 0; 
-            
+              
             let pill = new St.Button({
                 child: label,
                 style_class: 'lens-date-pill',
                 can_focus: true,
                 reactive: true
             });
+
             if (opt === this._activeDateOption) pill.add_style_class_name('active');
             
             pill.connectObject('button-press-event', () => {
@@ -100,11 +104,13 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
             can_focus: true,
             reactive: true
         });
+
         this._resetBtn.connectObject('button-press-event', () => {
             this.clear();
             if (this.callbacks.onFiltersChanged) this.callbacks.onFiltersChanged();
             return Clutter.EVENT_STOP;
         }, this);
+
         row2.add_child(this._resetBtn);
 
         this.add_child(row1);
@@ -149,6 +155,7 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         this._activeDateOption = option;
         this._datePills.forEach(p => p.remove_style_class_name('active'));
         pillWidget.add_style_class_name('active');
+
         if (!this._isClearing && this.callbacks.onFiltersChanged) {
             this.callbacks.onFiltersChanged();
         }
@@ -227,6 +234,7 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
                     if (info.get_file_type() === Gio.FileType.DIRECTORY) {
                         let name = info.get_name();
                         if (name.startsWith('.') && !prefix.startsWith('.')) continue;
+
                         if (name.toLowerCase().startsWith(prefix) && name !== prefix) {
                             match = name;
                             break; 
@@ -273,6 +281,7 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
                 this._autocompleteActive = false;
             }
         }
+
         return Clutter.EVENT_PROPAGATE;
     }
 
@@ -282,10 +291,12 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
         let extRaw = this._extEntry.get_text().trim();
 
         if (dir) parts.push(`dir:${dir}`);
+        
         if (extRaw) {
             let cleanedExts = extRaw.split(',')
                 .map(e => e.trim().replace(/^\.+/, ''))
                 .filter(e => e.length > 0);
+            
             if (cleanedExts.length > 0) {
                 parts.push(`ext:${cleanedExts.join(',')}`);
             }
@@ -328,8 +339,10 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
     }
 });
 
+
 export const GnomeLensSearchBar = GObject.registerClass(
 class GnomeLensSearchBar extends St.BoxLayout {
+
     _init(settings, callbacks) {
         super._init({
             style_class: 'lens-entry-container',
@@ -338,6 +351,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
         this._settings = settings;
         this.callbacks = callbacks || {};
+
         this._debounceId = 0;
         this._setQueryIdleId = 0;
         this._focusIdleId = 0;
@@ -354,10 +368,12 @@ class GnomeLensSearchBar extends St.BoxLayout {
             reactive: true,
             can_focus: true,
         });
+
         this._backButton.connectObject('button-press-event', () => {
             if (this.callbacks.onBack) this.callbacks.onBack();
             return Clutter.EVENT_STOP;
         }, this);
+
         this.add_child(this._backButton);
 
         this._upButton = new St.Button({
@@ -368,10 +384,12 @@ class GnomeLensSearchBar extends St.BoxLayout {
             can_focus: true,
             visible: false,
         });
+
         this._upButton.connectObject('button-press-event', () => {
             this._navigateUpDirectory();
             return Clutter.EVENT_STOP;
         }, this);
+
         this.add_child(this._upButton);
 
         this._searchIcon = new St.Icon({
@@ -409,7 +427,6 @@ class GnomeLensSearchBar extends St.BoxLayout {
             can_focus: true,
             visible: false,
         });
-
         this._clearButton.connectObject('button-press-event', () => {
             this.setQuery('');
             if (this.callbacks.onClear) this.callbacks.onClear();
@@ -426,7 +443,6 @@ class GnomeLensSearchBar extends St.BoxLayout {
             reactive: true,
             can_focus: true,
         });
-
         this._filterButton.connectObject('button-press-event', () => {
             if (this.callbacks.onToggleFilters) this.callbacks.onToggleFilters();
             return Clutter.EVENT_STOP;
@@ -458,6 +474,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
     _updateButtonVisibility(text) {
         this._clearButton.visible = text.length > 0;
+
         let isDirQuery = text.startsWith('/') || text.startsWith('~/');
         this._upButton.visible = isDirQuery && text !== '/' && text !== '~/' && text !== '~';
     }
@@ -561,7 +578,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
                 }
             }
         }
-
+        
         this._lastText = text;
 
         if (this._debounceId > 0) {
@@ -606,6 +623,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
                     if (info.get_file_type() === Gio.FileType.DIRECTORY) {
                         let name = info.get_name();
                         if (name.startsWith('.') && !prefix.startsWith('.')) continue;
+
                         if (name.toLowerCase().startsWith(prefix) && name !== prefix) {
                             match = name;
                             break; 
@@ -622,11 +640,13 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
                     let newText = originalText;
                     let lastSlash = newText.lastIndexOf('/');
+                    
                     if (lastSlash >= tokenStartIdx) {
                         newText = newText.substring(0, lastSlash + 1);
                     } else {
                         newText = newText.substring(0, tokenStartIdx);
                     }
+                    
                     newText += match + '/';
                     
                     this._isClearing = true;
@@ -662,6 +682,14 @@ class GnomeLensSearchBar extends St.BoxLayout {
             }
         }
 
+        if (symbol === Clutter.KEY_BackSpace) {
+            let isDirQuery = text.startsWith('/') || text.startsWith('~/');
+            if (isDirQuery && text.endsWith('/') && text !== '/' && text !== '~/' && text !== '~') {
+                this._navigateUpDirectory();
+                return Clutter.EVENT_STOP;
+            }
+        }
+
         if (this._autocompleteActive) {
             if (symbol === Clutter.KEY_Right || symbol === Clutter.KEY_End || symbol === Clutter.KEY_Tab || symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
                 this._autocompleteActive = false;
@@ -678,6 +706,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
                 if (this.callbacks.onSearch) {
                     this.callbacks.onSearch(text.trim());
                 }
+
                 return Clutter.EVENT_STOP;
             } else {
                 this._autocompleteActive = false;
@@ -700,6 +729,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
             if (this.callbacks.onNavigateDown) this.callbacks.onNavigateDown();
             return Clutter.EVENT_STOP;
         }
+
         if (symbol === Clutter.KEY_Up) {
             if (this.callbacks.onNavigateUp) this.callbacks.onNavigateUp();
             return Clutter.EVENT_STOP;
@@ -734,6 +764,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
             if (this._setQueryIdleId > 0) {
                 GLib.source_remove(this._setQueryIdleId);
             }
+
             this._setQueryIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                 this._setQueryIdleId = 0;
                 let len = text.length;

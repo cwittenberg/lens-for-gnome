@@ -88,6 +88,13 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
     settings.bind('show-document-text', docTextRow, 'active', Gio.SettingsBindFlags.DEFAULT);
     resultsGroup.add(docTextRow);
 
+    const shortcutsRow = new Adw.SwitchRow({
+        title: 'Show Result Shortcuts',
+        subtitle: 'Show numbers 1-9 next to search results for quick keyboard selection.',
+    });
+    settings.bind('show-result-shortcuts', shortcutsRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+    resultsGroup.add(shortcutsRow);
+
     const hasMediaDeps = checkDependencies();
     const previewSwitch = new Gtk.Switch({ valign: Gtk.Align.CENTER });
     const previewRow = new Adw.ActionRow({
@@ -144,6 +151,7 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
             rgba: rgba,
             valign: Gtk.Align.CENTER
         });
+
         colorButton.connect('notify::rgba', () => {
             let c = colorButton.get_rgba();
             let r = Math.round(c.red * 255).toString(16).padStart(2, '0');
@@ -157,6 +165,7 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
             use_alpha: false,
             valign: Gtk.Align.CENTER
         });
+
         colorButton.connect('color-set', () => {
             let c = colorButton.get_rgba();
             let r = Math.round(c.red * 255).toString(16).padStart(2, '0');
@@ -191,7 +200,6 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
         label: 'Browse...',
         valign: Gtk.Align.CENTER,
     });
-
     selectThemeBtn.connect('clicked', () => {
         let dialog = new Gtk.FileDialog({ title: 'Select Theme File' });
         
@@ -252,7 +260,7 @@ export function buildLookAndFeelPage(settings, window, extensionPrefs) {
         colorRow.set_sensitive(!hasTheme);
         transRow.set_sensitive(!hasTheme);
     };
-
+    
     let themePathChangedId = settings.connect('changed::ui-theme-path', updateThemeSensitivity);
     updateThemeSensitivity();
 

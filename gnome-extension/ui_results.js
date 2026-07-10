@@ -6,6 +6,7 @@ import GObject from 'gi://GObject';
 
 export const GnomeLensResultsList = GObject.registerClass(
 class GnomeLensResultsList extends St.ScrollView {
+
     _init(settings, callbacks) {
         super._init({
             style_class: 'lens-results-scroll',
@@ -19,6 +20,7 @@ class GnomeLensResultsList extends St.ScrollView {
 
         this._settings = settings;
         this.callbacks = callbacks || {};
+
         this._results = [];
         this._resultWidgets = [];
         this._selectedIndex = -1;
@@ -33,12 +35,17 @@ class GnomeLensResultsList extends St.ScrollView {
         this._chunkSize = 25;
         this._currentGroup = -2;
         this._bestMatchesLength = 0;
+
         this._scrollConnected = false;
+        this._updateNumbersIdleId = 0;
+        this._visibleShortcuts = new Map();
 
         this._resultsBox = new St.BoxLayout({
             vertical: true,
             x_expand: true,
         });
+        
+        this._resultsBox.connectObject('notify::allocation', () => this._scheduleUpdateVisibleNumbers(), this);
         
         this.add_child(this._resultsBox);
     }
@@ -47,6 +54,9 @@ class GnomeLensResultsList extends St.ScrollView {
         let symbol = keyEvent.get_key_symbol();
         let state = keyEvent.get_state();
         let isShift = (state & Clutter.ModifierType.SHIFT_MASK) !== 0;
+        let hasCtrl = (state & Clutter.ModifierType.CONTROL_MASK) !== 0;
+        let hasAlt = (state & Clutter.ModifierType.MOD1_MASK) !== 0;
+        let hasSuper = (state & Clutter.ModifierType.SUPER_MASK) !== 0;
         
         if (symbol === Clutter.KEY_Right) {
             if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
@@ -56,6 +66,39 @@ class GnomeLensResultsList extends St.ScrollView {
         } else if (symbol === Clutter.KEY_Left) {
             if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
                 if (this.callbacks.onScrub) this.callbacks.onScrub(isShift ? -0.20 : -5, isShift);
+                return Clutter.EVENT_STOP;
+            }
+        }
+
+        if (symbol === Clutter.KEY_BackSpace) {
+            if (this.callbacks.onNavigateUpDirectory) this.callbacks.onNavigateUpDirectory();
+            return Clutter.EVENT_STOP;
+        }
+
+        if (symbol === Clutter.KEY_Home || symbol === Clutter.KEY_KP_Home) {
+            if (this._results.length > 0) {
+                this._setSelectedIndex(0);
+            }
+            return Clutter.EVENT_STOP;
+        }
+
+        if (symbol === Clutter.KEY_End || symbol === Clutter.KEY_KP_End) {
+            if (this._results.length > 0) {
+                this._setSelectedIndex(this._results.length - 1);
+            }
+            return Clutter.EVENT_STOP;
+        }
+
+        let showShortcuts = this._settings.get_boolean('show-result-shortcuts');
+
+        if (showShortcuts && !hasCtrl && !hasAlt && !hasSuper) {
+            let num = -1;
+            if (symbol >= Clutter.KEY_1 && symbol <= Clutter.KEY_9) num = symbol - Clutter.KEY_0;
+            else if (symbol >= Clutter.KEY_KP_1 && symbol <= Clutter.KEY_KP_9) num = symbol - Clutter.KEY_KP_0;
+
+            if (num !== -1 && this._visibleShortcuts && this._visibleShortcuts.has(num)) {
+                let idx = this._visibleShortcuts.get(num);
+                this._setSelectedIndex(idx);
                 return Clutter.EVENT_STOP;
             }
         }
@@ -73,6 +116,16 @@ class GnomeLensResultsList extends St.ScrollView {
         } else if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
             this.launchSelected();
             return Clutter.EVENT_STOP;
+        }
+
+        if (!hasCtrl && !hasAlt && !hasSuper && symbol !== Clutter.KEY_Escape) {
+            let unicode = Clutter.keysym_to_unicode(symbol);
+            if (unicode >= 32 && unicode <= 126) {
+                if (this.callbacks.onAppendSearchText) {
+                    this.callbacks.onAppendSearchText(String.fromCharCode(unicode));
+                }
+                return Clutter.EVENT_STOP;
+            }
         }
 
         return super.vfunc_key_press_event(keyEvent);
@@ -278,6 +331,7 @@ class GnomeLensResultsList extends St.ScrollView {
     _fetchThumbnailAsync(filepath, iconActor, fallbackIconName, isImagePreview, cancellable) {
         let file = Gio.File.new_for_path(filepath);
         let uri = file.get_uri();
+
         let hash = GLib.compute_checksum_for_string(GLib.ChecksumType.MD5, uri, -1);
         
         let cacheDir = GLib.get_user_cache_dir();
@@ -317,13 +371,65 @@ class GnomeLensResultsList extends St.ScrollView {
         checkNext(0);
     }
 
-    _onScroll() {
+    _scheduleUpdateVisibleNumbers() {
+        if (this._updateNumbersIdleId > 0) return;
+        this._updateNumbersIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._updateNumbersIdleId = 0;
+            this._updateVisibleNumbers();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _updateVisibleNumbers() {
+        if (!this._resultWidgets) return;
         let adj = this.vscroll ? this.vscroll.adjustment : this.vadjustment;
         if (!adj) return;
 
+        let val = adj.value;
+        let pageSize = adj.page_size;
+
+        let visibleIndex = 1;
+        this._visibleShortcuts.clear();
+
+        let showShortcuts = this._settings.get_boolean('show-result-shortcuts');
+
+        for (let i = 0; i < this._resultWidgets.length; i++) {
+            let widget = this._resultWidgets[i];
+            if (!widget) continue;
+
+            if (!showShortcuts) {
+                if (widget._shortcutLabel) widget._shortcutLabel.set_opacity(0);
+                continue;
+            }
+
+            let alloc = widget.get_allocation_box();
+            let itemTop = alloc.y1;
+            let itemBottom = alloc.y2;
+
+            if (itemBottom > val && itemTop < val + pageSize && itemBottom > itemTop) {
+                if (visibleIndex <= 9) {
+                    if (widget._shortcutLabel) {
+                        widget._shortcutLabel.set_text(visibleIndex.toString());
+                        widget._shortcutLabel.set_opacity(255);
+                    }
+                    this._visibleShortcuts.set(visibleIndex, i);
+                    visibleIndex++;
+                } else {
+                    if (widget._shortcutLabel) widget._shortcutLabel.set_opacity(0);
+                }
+            } else {
+                if (widget._shortcutLabel) widget._shortcutLabel.set_opacity(0);
+            }
+        }
+    }
+
+    _onScroll() {
+        let adj = this.vscroll ? this.vscroll.adjustment : this.vadjustment;
+        if (!adj) return;
         if (adj.value >= adj.upper - adj.page_size - 150) {
             this._renderNextChunk();
         }
+        this._scheduleUpdateVisibleNumbers();
     }
 
     renderResults(resultsArray, activeFilter = 'All', savedSelectionId = null) {
@@ -342,11 +448,13 @@ class GnomeLensResultsList extends St.ScrollView {
         
         let filteredArray = resultsArray.filter(res => {
             if (activeFilter === 'All') return true;
+
             let group = this._getGroup(res);
             if (activeFilter === 'Folders') return group === 0;
             if (activeFilter === 'Apps') return group === 1;
             if (activeFilter === 'Emails') return group === 2;
             if (activeFilter === 'Files') return group === 3 || group === 4;
+
             return true;
         });
 
@@ -381,6 +489,7 @@ class GnomeLensResultsList extends St.ScrollView {
             });
         } else {
             rest = scoreSorted;
+
             rest.sort((a, b) => {
                 let aMatch = a.ai_matched === true;
                 let bMatch = b.ai_matched === true;
@@ -426,6 +535,8 @@ class GnomeLensResultsList extends St.ScrollView {
             }
             this._setSelectedIndex(newIndex);
         }
+
+        this._scheduleUpdateVisibleNumbers();
     }
 
     _renderNextChunk() {
@@ -435,6 +546,8 @@ class GnomeLensResultsList extends St.ScrollView {
         let end = Math.min(start + this._chunkSize, this._results.length);
 
         let groupNames = ["Folders", "Applications & Tools", "Emails", "Indexed Documents", "Other Files"];
+
+        let showShortcuts = this._settings.get_boolean('show-result-shortcuts');
 
         for (let i = start; i < end; i++) {
             let res = this._results[i];
@@ -464,7 +577,30 @@ class GnomeLensResultsList extends St.ScrollView {
             if (res.ai_matched === false) {
                 itemBox.add_style_class_name('irrelevant');
             }
+
+            let shortcutContainer = new St.Widget({
+                width: 28,
+                layout_manager: new Clutter.BinLayout(),
+                visible: showShortcuts
+            });
             
+            let shortcutLabel = new St.Label({
+                style_class: 'lens-result-shortcut',
+                y_align: Clutter.ActorAlign.CENTER,
+                x_align: Clutter.ActorAlign.CENTER,
+                opacity: 0
+            });
+            
+            if (showShortcuts && i < 9 && start === 0) {
+                shortcutLabel.set_text((i + 1).toString());
+                shortcutLabel.set_opacity(255);
+                this._visibleShortcuts.set(i + 1, i);
+            }
+            
+            itemBox._shortcutLabel = shortcutLabel;
+            shortcutContainer.add_child(shortcutLabel);
+            itemBox.add_child(shortcutContainer);
+
             let cancellable = new Gio.Cancellable();
             itemBox.connectObject('destroy', () => {
                 if (!cancellable.is_cancelled()) {
@@ -546,8 +682,18 @@ class GnomeLensResultsList extends St.ScrollView {
                 }
             }
 
+            let iconContainer = new St.Widget({
+                width: 32,
+                height: 32,
+                layout_manager: new Clutter.BinLayout()
+            });
+
             let iconActor = new St.Icon({
                 style_class: 'lens-result-icon',
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true,
+                y_expand: true
             });
 
             if (gicon) {
@@ -559,8 +705,9 @@ class GnomeLensResultsList extends St.ScrollView {
             if ((isImagePreview || isVideoPreview || isPdfPreview) && res.filepath) {
                 this._fetchThumbnailAsync(res.filepath, iconActor, iconName, isImagePreview, cancellable);
             }
-
-            itemBox.add_child(iconActor);
+            
+            iconContainer.add_child(iconActor);
+            itemBox.add_child(iconContainer);
 
             let textBox = new St.BoxLayout({
                 vertical: true,
@@ -676,7 +823,6 @@ class GnomeLensResultsList extends St.ScrollView {
                             dateStr = d.toLocaleDateString([], {month: 'short', day: 'numeric', year: 'numeric'});
                         }
                     }
-
                     let datePill = new St.BoxLayout({
                         vertical: false,
                         style_class: 'lens-result-folder-pill',
@@ -797,5 +943,20 @@ class GnomeLensResultsList extends St.ScrollView {
         }
         
         this._renderedCount = end;
+        this._scheduleUpdateVisibleNumbers();
+    }
+
+    destroy() {
+        if (this._updateNumbersIdleId > 0) {
+            GLib.source_remove(this._updateNumbersIdleId);
+            this._updateNumbersIdleId = 0;
+        }
+        if (this._scrollConnected) {
+            let adj = this.vscroll ? this.vscroll.adjustment : this.vadjustment;
+            if (adj) adj.disconnectObject(this);
+            this._scrollConnected = false;
+        }
+        this.disconnectObject(this);
+        super.destroy();
     }
 });

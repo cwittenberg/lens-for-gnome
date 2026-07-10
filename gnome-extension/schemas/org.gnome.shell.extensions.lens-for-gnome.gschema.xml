@@ -61,6 +61,11 @@
       <summary>Prioritize Folders</summary>
       <description>Force the background engine to always return a few folder matches if any exist.</description>
     </key>
+    <key name="show-result-shortcuts" type="b">
+      <default>true</default>
+      <summary>Show Result Shortcuts (1-9)</summary>
+      <description>Show numbers 1-9 next to search results for quick keyboard selection.</description>
+    </key>
     <key name="show-preview" type="b">
       <default>true</default>
       <summary>Show Media Preview</summary>
