@@ -18,10 +18,33 @@ It can:
 - Search exact text using SQLite FTS5.
 - Search by meaning using local embeddings.
 - Merge keyword and semantic results with Reciprocal Rank Fusion.
-- Extract text from documents, images, PDFs, mail, and videos.
+- Extract text from documents, images, PDFs, office documents, mail, and videos.
 - Run local LLM-powered queries when enabled.
 - Keep indexed data, embeddings, metadata, and models on your machine.
 - Fast preview videos or images on hover, multi-monitor capable.
+
+## Screenshots
+
+Filtering based on your data using AI
+
+<img width="500" alt="Screencast From 2026-07-10 22-31-15 00:00:06" src="https://github.com/user-attachments/assets/755f71a4-4fd8-4fb9-bb4e-d06ba675044e" />
+
+Questions about your data, powered by local AI
+
+<img width="500" alt="Screencast From 2026-07-10 22-44-50 00:00:35" src="https://github.com/user-attachments/assets/6e746b11-3fac-41a1-b4d7-17acacd5c9f6" />
+
+Filebrowsing and fast video preview. 
+
+<img width="500" alt="Screencast From 2026-07-10 22-44-50 00:01:05" src="https://github.com/user-attachments/assets/4efd1947-1b5f-46de-89da-ace8cb7caa19" />
+
+Support for different AI models, which can be turned off
+
+<img width="500" alt="Screencast From 2026-07-10 22-44-50 00:02:16" src="https://github.com/user-attachments/assets/7a0e5dc1-3cb3-4565-9d3a-c3a25d07fa5d" />
+
+Different themes available:
+
+<img width="500" alt="Screencast From 2026-07-10 22-44-50 00:04:01" src="https://github.com/user-attachments/assets/30824bfc-2dc6-47d4-96ec-7594591bd2ef" />
+
 
 ## Why Lens Exists
 
