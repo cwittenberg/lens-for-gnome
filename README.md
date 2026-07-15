@@ -8,6 +8,8 @@ The goal is simple: fast, private desktop search that helps you find information
 
 [![Get it from the Snap Store](https://snapcraft.io/en/dark/install.svg)](https://snapcraft.io/lens-for-gnome)
 
+The GNOME extension used to interface with this backend-service is published on the GNOME store here: https://extensions.gnome.org/extension/10337/lens/
+
 ## What Lens Does
 
 Lens turns content into a powerful searchable index on your computer.
