@@ -31,7 +31,7 @@ Filtering based on your data using AI
 
 <img width="500" alt="Screencast From 2026-07-10 22-31-15 00:00:06" src="https://github.com/user-attachments/assets/755f71a4-4fd8-4fb9-bb4e-d06ba675044e" />
 
-Questions about your data, powered by local AI
+Questions about your data, powered by local AI - even if it's from i.e. screenshots/PDFs (OCR capable)
 
 <img width="500" alt="Screencast From 2026-07-10 22-44-50 00:00:35" src="https://github.com/user-attachments/assets/6e746b11-3fac-41a1-b4d7-17acacd5c9f6" />
 
