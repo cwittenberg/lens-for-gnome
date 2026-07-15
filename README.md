@@ -2,9 +2,9 @@
 
 **Lens for GNOME** is an AI powered local-first desktop search engine.
 
-It indexes local files, extracts searchable text, watches folders for changes, runs local embeddings, supports OCR, syncs mail, and can use local GGUF language models through llama.cpp (such as those from HuggingFace).
+It serves as a fast launcher and smart search solution. It indexes local apps and files, extracts searchable text, watches folders for changes, runs local embeddings, supports OCR, syncs mail, and can use local GGUF language models through llama.cpp (such as those from HuggingFace).
 
-The goal is simple: fast, private desktop search that helps you find information inside your files without sending your documents to a remote service. Lens for GNOME is local-first.
+The goal is simple: fast, private desktop search that helps you find information inside your files _without_ sending your documents to a remote service. Lens for GNOME is 100% privacy-first and local-first.
 
 [![Get it from the Snap Store](https://snapcraft.io/en/dark/install.svg)](https://snapcraft.io/lens-for-gnome)
 
